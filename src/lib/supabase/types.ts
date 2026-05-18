@@ -62,7 +62,7 @@ export type Database = {
       crm_deals: {
         Row: {
           id: string; contact_id: string; pipeline_id: string; stage_id: string; assigned_to: string | null
-          service_id: string; plan_id: string | null
+          service_id: string | null; plan_id: string | null; chatwoot_conversation_id: string | null
           urgency: number; temperature: 'frio' | 'morno' | 'quente' | 'fechando'
           interest_point: string | null; objection: string | null; previous_experience: string | null
           payment_method: 'pix' | 'cartao_credito' | 'cartao_debito' | 'boleto' | 'dinheiro' | null
@@ -70,7 +70,7 @@ export type Database = {
         }
         Insert: {
           id?: string; contact_id: string; pipeline_id: string; stage_id: string; assigned_to?: string | null
-          service_id: string; plan_id?: string | null
+          service_id?: string | null; plan_id?: string | null; chatwoot_conversation_id?: string | null
           urgency?: number; temperature?: 'frio' | 'morno' | 'quente' | 'fechando'
           interest_point?: string | null; objection?: string | null; previous_experience?: string | null
           payment_method?: 'pix' | 'cartao_credito' | 'cartao_debito' | 'boleto' | 'dinheiro' | null
@@ -78,7 +78,7 @@ export type Database = {
         }
         Update: {
           id?: string; contact_id?: string; pipeline_id?: string; stage_id?: string; assigned_to?: string | null
-          service_id?: string; plan_id?: string | null
+          service_id?: string; plan_id?: string | null; chatwoot_conversation_id?: string | null
           urgency?: number; temperature?: 'frio' | 'morno' | 'quente' | 'fechando'
           interest_point?: string | null; objection?: string | null; previous_experience?: string | null
           payment_method?: 'pix' | 'cartao_credito' | 'cartao_debito' | 'boleto' | 'dinheiro' | null

@@ -75,8 +75,9 @@ export interface Deal {
   pipelineId: string
   stageId: string
   assignedTo: User
-  serviceId: string
-  service: Pick<Service, 'id' | 'name'>
+  serviceId: string | null
+  service: Pick<Service, 'id' | 'name'> | null
+  chatwootConversationId: string | null
   planId: string | null
   plan: Pick<ServicePlan, 'id' | 'name' | 'tablePrice' | 'maxDiscountPct'> | null
   urgency: 1 | 2 | 3 | 4 | 5

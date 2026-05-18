@@ -44,7 +44,7 @@ export function DealCard({ deal, onUpdated }: DealCardProps) {
         <div className="mb-2.5">
           <p className="text-xs text-gray-600 flex items-center gap-1.5">
             <span className="text-gray-400">📦</span>
-            {deal.service.name}
+            {deal.service?.name ?? 'Sem serviço'}
           </p>
           {deal.plan && (
             <p className="text-xs text-brand-600 font-medium mt-0.5 ml-5">{deal.plan.name}</p>

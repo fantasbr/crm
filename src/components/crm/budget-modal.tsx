@@ -33,6 +33,7 @@ export function BudgetModal({ deal, open, onClose }: BudgetModalProps) {
     setSelected([])
     setValidDays('7')
     setNotes('')
+    if (!deal.serviceId) { setPlans([]); return }
     const supabase = createClient()
     supabase.from('crm_service_plans')
       .select('*')
@@ -105,7 +106,7 @@ export function BudgetModal({ deal, open, onClose }: BudgetModalProps) {
             <FileText className="w-5 h-5 text-amber-500" />
             Gerar Orçamento
           </DialogTitle>
-          <p className="text-sm text-gray-500">{deal.contact.name} · {deal.service.name}</p>
+          <p className="text-sm text-gray-500">{deal.contact.name}{deal.service ? ` · ${deal.service.name}` : ''}</p>
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto space-y-5 py-1 pr-1">
@@ -116,7 +117,7 @@ export function BudgetModal({ deal, open, onClose }: BudgetModalProps) {
             </p>
             {plans.length === 0 ? (
               <div className="text-center py-6 bg-gray-50 rounded-lg border border-gray-200">
-                <p className="text-sm text-gray-400">Nenhum plano ativo para {deal.service.name}</p>
+                <p className="text-sm text-gray-400">Nenhum plano ativo{deal.service ? ` para ${deal.service.name}` : ''}</p>
                 <p className="text-xs text-gray-400 mt-1">Cadastre planos em Configurações → Serviços</p>
               </div>
             ) : (

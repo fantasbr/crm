@@ -14,7 +14,7 @@ type DbStage = Database['public']['Tables']['crm_stages']['Row']
 function dbDealToDeal(row: Record<string, unknown>): Deal {
   const contact = row.crm_contacts as Record<string, string>
   const user = row.assigned_user as Record<string, string> | null
-  const svc = row.crm_services as Record<string, unknown>
+  const svc = row.crm_services as Record<string, unknown> | null
   const plan = row.crm_service_plans as Record<string, unknown> | null
   return {
     id: row.id as string,
@@ -32,8 +32,9 @@ function dbDealToDeal(row: Record<string, unknown>): Deal {
     assignedTo: user
       ? { id: user.id, name: user.name, email: '', role: user.role as User['role'] }
       : { id: '', name: 'Sem responsável', email: '', role: 'seller' },
-    serviceId: row.service_id as string,
-    service: { id: svc.id as string, name: svc.name as string },
+    serviceId: row.service_id as string | null,
+    service: svc ? { id: svc.id as string, name: svc.name as string } : null,
+    chatwootConversationId: row.chatwoot_conversation_id as string | null,
     planId: row.plan_id as string | null,
     plan: plan ? {
       id: plan.id as string,

@@ -10,7 +10,7 @@ import type { Database } from '@/lib/supabase/types'
 type Contact = Database['public']['Tables']['crm_contacts']['Row']
 type DealSummary = {
   contact_id: string
-  service_id: string
+  service_id: string | null
   temperature: string
   negotiated_value: number | null
   status: string
@@ -128,11 +128,13 @@ export function ContactsTable({ contacts, deals }: ContactsTableProps) {
                   <td className="px-5 py-4">
                     <div className="flex items-center gap-2">
                       <a
-                        href={`https://wa.me/55${contact.phone.replace(/\D/g, '')}`}
+                        href={contact.chatwoot_id
+                          ? `${process.env.NEXT_PUBLIC_CHATWOOT_URL}/app/accounts/${process.env.NEXT_PUBLIC_CHATWOOT_ACCOUNT_ID}/contacts/${contact.chatwoot_id}`
+                          : `https://wa.me/55${contact.phone.replace(/\D/g, '')}`}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-                        title="WhatsApp"
+                        title={contact.chatwoot_id ? 'Ver no Chatwoot' : 'WhatsApp'}
                       >
                         <MessageCircle className="w-4 h-4" />
                       </a>

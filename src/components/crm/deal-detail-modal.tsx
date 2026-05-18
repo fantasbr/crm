@@ -5,7 +5,7 @@ import { Deal } from '@/types/crm'
 import { paymentLabels, temperatureEmoji, temperatureColors, originLabels, originColors } from '@/lib/labels'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
-import { Phone, Mail, Calendar, MessageSquare, ArrowRight, CheckCircle, XCircle, Pencil, Check, X, FileText } from 'lucide-react'
+import { Phone, Mail, Calendar, MessageSquare, ArrowRight, CheckCircle, XCircle, Pencil, Check, X, FileText, ExternalLink } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import type { Database } from '@/lib/supabase/types'
 
@@ -122,31 +122,41 @@ export function DealDetailModal({ deal, open, onClose, onUpdated, onBudget }: De
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+      <DialogContent className="h-[780px] max-h-[90vh] w-[calc(100%-2rem)] overflow-hidden flex flex-col sm:max-w-2xl lg:max-w-3xl xl:max-w-4xl">
         <DialogHeader>
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <DialogTitle className="text-xl">{deal.contact.name}</DialogTitle>
+          <div className="flex flex-col gap-3 pr-9 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <DialogTitle className="text-xl leading-tight break-words">{deal.contact.name}</DialogTitle>
               <p className="text-sm text-gray-500 mt-0.5">{deal.contact.phone}</p>
             </div>
-            <div className="flex items-center gap-2 flex-shrink-0">
-              <span className={cn('text-sm font-medium px-3 py-1 rounded-full', temperatureColors[deal.temperature])}>
+            <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+              <span className={cn('whitespace-nowrap text-sm font-medium px-3 py-1 rounded-full', temperatureColors[deal.temperature])}>
                 {temperatureEmoji[deal.temperature]} {deal.temperature}
               </span>
+              {deal.chatwootConversationId && (
+                <a
+                  href={`${process.env.NEXT_PUBLIC_CHATWOOT_URL}/app/accounts/${process.env.NEXT_PUBLIC_CHATWOOT_ACCOUNT_ID}/conversations/${deal.chatwootConversationId}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 whitespace-nowrap px-3 py-1 bg-indigo-500 text-white text-xs font-medium rounded-full hover:bg-indigo-600 transition-colors"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" /> Chatwoot
+                </a>
+              )}
               {deal.status === 'open' && (
                 <>
                   {onBudget && (
                     <button onClick={onBudget}
-                      className="flex items-center gap-1 px-3 py-1 bg-amber-500 text-white text-xs font-medium rounded-full hover:bg-amber-600 transition-colors">
+                      className="flex items-center gap-1 whitespace-nowrap px-3 py-1 bg-amber-500 text-white text-xs font-medium rounded-full hover:bg-amber-600 transition-colors">
                       <FileText className="w-3.5 h-3.5" /> Orçamento
                     </button>
                   )}
                   <button onClick={() => handleCloseDeal('won')} disabled={!!closingDeal}
-                    className="flex items-center gap-1 px-3 py-1 bg-green-600 text-white text-xs font-medium rounded-full hover:bg-green-700 disabled:opacity-50 transition-colors">
+                    className="flex items-center gap-1 whitespace-nowrap px-3 py-1 bg-green-600 text-white text-xs font-medium rounded-full hover:bg-green-700 disabled:opacity-50 transition-colors">
                     <CheckCircle className="w-3.5 h-3.5" /> Ganho
                   </button>
                   <button onClick={() => handleCloseDeal('lost')} disabled={!!closingDeal}
-                    className="flex items-center gap-1 px-3 py-1 bg-red-500 text-white text-xs font-medium rounded-full hover:bg-red-600 disabled:opacity-50 transition-colors">
+                    className="flex items-center gap-1 whitespace-nowrap px-3 py-1 bg-red-500 text-white text-xs font-medium rounded-full hover:bg-red-600 disabled:opacity-50 transition-colors">
                     <XCircle className="w-3.5 h-3.5" /> Perdido
                   </button>
                 </>
@@ -180,6 +190,25 @@ export function DealDetailModal({ deal, open, onClose, onUpdated, onBudget }: De
                 <div className="flex items-center gap-2 text-sm text-gray-700">
                   <Phone className="w-3.5 h-3.5 text-gray-400" />
                   <a href={`tel:${deal.contact.phone}`} className="hover:text-brand-500">{deal.contact.phone}</a>
+                  {deal.chatwootConversationId ? (
+                    <a
+                      href={`${process.env.NEXT_PUBLIC_CHATWOOT_URL}/app/accounts/${process.env.NEXT_PUBLIC_CHATWOOT_ACCOUNT_ID}/conversations/${deal.chatwootConversationId}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="ml-1 text-xs text-indigo-500 hover:text-indigo-700 font-medium"
+                    >
+                      ver conversa
+                    </a>
+                  ) : (
+                    <a
+                      href={`https://wa.me/55${deal.contact.phone.replace(/\D/g, '')}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="ml-1 text-xs text-green-600 hover:text-green-700 font-medium"
+                    >
+                      WhatsApp
+                    </a>
+                  )}
                 </div>
                 {deal.contact.email && (
                   <div className="flex items-center gap-2 text-sm text-gray-700">
@@ -214,7 +243,7 @@ export function DealDetailModal({ deal, open, onClose, onUpdated, onBudget }: De
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <p className="text-xs text-gray-400 mb-1">Serviço</p>
-                    <p className="text-sm font-medium text-gray-900">{deal.service.name}</p>
+                    <p className="text-sm font-medium text-gray-900">{deal.service?.name ?? '—'}</p>
                     {deal.plan ? (
                       <div className="mt-1">
                         <span className="inline-flex items-center text-xs bg-brand-50 text-brand-700 border border-brand-200 rounded-full px-2 py-0.5 font-medium">

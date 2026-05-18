@@ -217,7 +217,7 @@ function PipelinesSection({ initialPipelines }: { initialPipelines: Pipeline[] }
       )}
 
       {pipelines.map(pipeline => (
-        <div key={pipeline.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div key={pipeline.id} className="relative bg-white rounded-xl border border-gray-200 overflow-visible">
           <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
             {editingPipeline === pipeline.id ? (
               <div className="flex items-center gap-2 flex-1">
@@ -282,7 +282,7 @@ function PipelinesSection({ initialPipelines }: { initialPipelines: Pipeline[] }
                     <>
                       <span className="text-sm text-gray-700 flex-1">{stage.name}</span>
 
-                      <div className="relative">
+                      <div className="relative z-20">
                         <button
                           onClick={() => setTypeMenuOpen(typeMenuOpen === stage.id ? null : stage.id)}
                           className={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full border transition-colors ${typeCfg.bg} ${typeCfg.text} ${typeCfg.border} hover:opacity-80`}
@@ -292,7 +292,7 @@ function PipelinesSection({ initialPipelines }: { initialPipelines: Pipeline[] }
                         </button>
 
                         {typeMenuOpen === stage.id && (
-                          <div className="absolute right-0 top-8 z-10 bg-white rounded-xl border border-gray-200 shadow-lg p-1.5 min-w-[160px]">
+                          <div className="absolute right-0 top-8 z-30 bg-white rounded-xl border border-gray-200 shadow-lg p-1.5 min-w-[160px]">
                             {(Object.entries(stageTypeConfig) as [StageType, typeof stageTypeConfig[StageType]][]).map(([type, cfg]) => (
                               <button
                                 key={type}

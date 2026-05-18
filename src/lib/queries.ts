@@ -188,8 +188,9 @@ export async function createDeal(deal: {
   pipeline_id: string
   stage_id: string
   assigned_to?: string
-  service_id: string
+  service_id?: string | null
   plan_id?: string
+  chatwoot_conversation_id?: string | null
   urgency: number
   temperature: 'frio' | 'morno' | 'quente' | 'fechando'
   interest_point?: string
@@ -222,6 +223,7 @@ export async function updateDeal(dealId: string, updates: {
   assigned_to?: string
   service_id?: string
   plan_id?: string | null
+  chatwoot_conversation_id?: string | null
   urgency?: number
   temperature?: 'frio' | 'morno' | 'quente' | 'fechando'
   interest_point?: string
