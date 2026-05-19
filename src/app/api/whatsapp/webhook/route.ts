@@ -10,14 +10,46 @@ function normalizePhone(jid: string): string {
   return jid.split('@')[0].replace(/\D/g, '')
 }
 
-function extractBody(message: Record<string, unknown>): string {
-  return (
-    (message.conversation as string) ??
-    ((message.extendedTextMessage as Record<string, unknown>)?.text as string) ??
-    ((message.imageMessage as Record<string, unknown>)?.caption as string) ??
-    ((message.videoMessage as Record<string, unknown>)?.caption as string) ??
-    '[mídia]'
-  )
+type MediaInfo = { body: string; mediaType: string | null; mediaUrl: string | null }
+
+function extractMediaInfo(msg: Record<string, unknown>): MediaInfo {
+  const message = msg.message as Record<string, unknown> | undefined
+  // S3/MinIO URL injected by Evolution API when storage is configured
+  const s3Url = (msg.mediaUrl as string | undefined) ?? null
+
+  if (!message) return { body: '[mídia]', mediaType: null, mediaUrl: null }
+  if (message.conversation) return { body: message.conversation as string, mediaType: null, mediaUrl: null }
+
+  const ext = message.extendedTextMessage as Record<string, unknown> | undefined
+  if (ext?.text) return { body: ext.text as string, mediaType: null, mediaUrl: null }
+
+  type M = { url?: string; mimetype?: string; caption?: string; fileName?: string }
+
+  if (message.imageMessage) {
+    const m = message.imageMessage as M
+    return { body: m.caption || '[Imagem]', mediaType: m.mimetype ?? 'image/jpeg', mediaUrl: s3Url }
+  }
+  if (message.videoMessage) {
+    const m = message.videoMessage as M
+    return { body: m.caption || '[Vídeo]', mediaType: m.mimetype ?? 'video/mp4', mediaUrl: s3Url }
+  }
+  if (message.audioMessage || message.pttMessage) {
+    const m = ((message.audioMessage ?? message.pttMessage) as M | undefined) ?? {}
+    return { body: '[Áudio]', mediaType: m.mimetype ?? 'audio/ogg', mediaUrl: s3Url }
+  }
+  if (message.documentMessage) {
+    const m = message.documentMessage as M
+    return {
+      body: m.fileName ? `[Documento: ${m.fileName}]` : '[Documento]',
+      mediaType: m.mimetype ?? 'application/octet-stream',
+      mediaUrl: s3Url,
+    }
+  }
+  if (message.stickerMessage) {
+    const m = message.stickerMessage as M
+    return { body: '[Sticker]', mediaType: m.mimetype ?? 'image/webp', mediaUrl: s3Url }
+  }
+  return { body: '[mídia]', mediaType: null, mediaUrl: null }
 }
 
 export async function POST(req: NextRequest) {
@@ -69,7 +101,7 @@ export async function POST(req: NextRequest) {
       const message = msg.message as Record<string, unknown> | undefined
       if (!message) continue
 
-      const body = extractBody(message)
+      const { body, mediaType, mediaUrl } = extractMediaInfo(msg)
       const waPhone = normalizePhone(remoteJid)
 
       // Encontrar ou criar contato — nunca sobrescreve phone/name existentes
@@ -138,6 +170,8 @@ export async function POST(req: NextRequest) {
             wa_message_id: waMessageId,
             direction: fromMe ? 'outbound' : 'inbound',
             body,
+            media_type: mediaType,
+            media_url: mediaUrl,
             sender_name: fromMe ? null : (pushName ?? null),
             status: 'delivered',
             metadata: msg as import('@/lib/supabase/types').Json,

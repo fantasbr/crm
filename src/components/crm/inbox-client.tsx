@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { NewDealModal } from '@/components/crm/new-deal-modal'
 import { cn } from '@/lib/utils'
-import { Send, Plus, Phone, CheckCheck, Clock, Search } from 'lucide-react'
+import { Send, Plus, Phone, CheckCheck, Clock, Search, Paperclip, FileText, X, Mic, Square } from 'lucide-react'
 import type { Database } from '@/lib/supabase/types'
 
 type DbInbox = Database['public']['Tables']['crm_inboxes']['Row']
@@ -62,10 +62,28 @@ export function InboxClient({
   const [loadingMsgs, setLoadingMsgs] = useState(false)
   const [search, setSearch] = useState('')
   const [newDealOpen, setNewDealOpen] = useState(false)
+  const [mounted, setMounted] = useState(false)
+  const [pendingFile, setPendingFile] = useState<{ base64: string; type: string; name: string; preview?: string } | null>(null)
+  const [recording, setRecording] = useState(false)
+  const [recordSeconds, setRecordSeconds] = useState(0)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Cache base64 de mídias enviadas pelo CRM (outbound, sem metadata no banco)
+  const mediaCacheRef = useRef<Map<string, string>>(new Map())
 
   const activeConv = conversations.find(c => c.id === activeConvId) ?? null
   const activeInbox = inboxes.find(i => i.id === activeInboxId) ?? null
+
+  useEffect(() => {
+    setMounted(true)
+    return () => {
+      // Garante que microfone e timer são liberados ao desmontar
+      if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop()
+      if (recordTimerRef.current) clearInterval(recordTimerRef.current)
+    }
+  }, [])
 
   // Ref para acessar a conversa ativa dentro do handler do EventSource
   const activeConvIdRef = useRef(activeConvId)
@@ -149,33 +167,124 @@ export function InboxClient({
     return () => es.close()
   }, [activeInboxId, supabase, loadConversations, loadMessages])
 
+  // ─── File picker ──────────────────────────────────────────────────────────
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const input = e.target as HTMLInputElement
+    const file = input.files?.[0]
+    input.value = ''  // reset so same file can be re-picked
+    if (!file) return
+    if (file.size > 16 * 1024 * 1024) {
+      setSendError('Arquivo muito grande. Limite: 16 MB')
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      const base64 = ev.target?.result as string
+      setPendingFile({
+        base64,
+        type: file.type || 'application/octet-stream',
+        name: file.name,
+        preview: file.type.startsWith('image/') ? base64 : undefined,
+      })
+    }
+    reader.readAsDataURL(file)
+  }
+
+  // ─── Voice recording ─────────────────────────────────────────────────────
+  const startRecording = async () => {
+    if (recording) return
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/ogg;codecs=opus'
+      const recorder = new MediaRecorder(stream, { mimeType })
+      const chunks: BlobPart[] = []
+
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data) }
+      recorder.onstop = () => {
+        stream.getTracks().forEach(t => t.stop())
+        const blob = new Blob(chunks, { type: mimeType })
+        const reader = new FileReader()
+        reader.onload = (ev) => {
+          setPendingFile({
+            base64: ev.target?.result as string,
+            type: mimeType.split(';')[0],  // "audio/webm" or "audio/ogg"
+            name: 'audio.ogg',
+          })
+        }
+        reader.readAsDataURL(blob)
+        if (recordTimerRef.current) clearInterval(recordTimerRef.current)
+        setRecording(false)
+        setRecordSeconds(0)
+      }
+
+      recorder.start()
+      mediaRecorderRef.current = recorder
+      setRecording(true)
+      setRecordSeconds(0)
+      recordTimerRef.current = setInterval(() => setRecordSeconds(s => s + 1), 1000)
+    } catch {
+      setSendError('Não foi possível acessar o microfone.')
+    }
+  }
+
+  const stopRecording = () => {
+    mediaRecorderRef.current?.stop()
+  }
+
   // ─── Send message ─────────────────────────────────────────────────────────
   const handleSend = async () => {
-    if (!text.trim() || !activeConvId || sending) return
+    const hasText = text.trim().length > 0
+    const hasMedia = !!pendingFile
+    if ((!hasText && !hasMedia) || !activeConvId || sending) return
     setSending(true)
     setSendError(null)
-    const body = text.trim()
+
+    const payload = hasMedia
+      ? {
+          conversationId: activeConvId,
+          mediaBase64: pendingFile.base64,
+          mediaType: pendingFile.type,
+          fileName: pendingFile.name,
+          caption: text.trim() || undefined,
+        }
+      : { conversationId: activeConvId, text: text.trim() }
+
+    // Captura antes de limpar o estado — closures React preservam o valor snapshot
+    const snapshotFile = pendingFile
+    const savedText = text
     setText('')
+    setPendingFile(null)
+
     try {
       const res = await fetch('/api/whatsapp/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversationId: activeConvId, text: body }),
+        body: JSON.stringify(payload),
       })
       if (!res.ok) {
-        setText(body)
+        // Restaura o que foi limpo para o usuário tentar de novo
+        setText(savedText)
+        if (hasMedia) setPendingFile(snapshotFile)
         let msg = `Erro ${res.status}`
         try {
-          const j = await res.json()
+          const j = await res.json() as { error?: string; detail?: string }
           msg = j.detail ? `${j.error}: ${j.detail}` : (j.error ?? msg)
         } catch { /* corpo não-JSON */ }
         setSendError(msg)
         console.error('Send failed', msg)
       } else {
+        const j = await res.json() as { ok: boolean; messageId?: string | null }
+        // Armazena base64 localmente para renderizar a mídia outbound no histórico
+        if (hasMedia && snapshotFile && j.messageId) {
+          mediaCacheRef.current.set(j.messageId, snapshotFile.base64)
+        }
         loadMessages(activeConvId)
       }
     } catch (err) {
-      setText(body)
+      setText(savedText)
+      if (hasMedia) setPendingFile(snapshotFile)
       setSendError(String(err))
     } finally {
       setSending(false)
@@ -270,7 +379,7 @@ export function InboxClient({
                           {name}
                         </span>
                         <span className="text-[11px] text-gray-400 flex-shrink-0 ml-1">
-                          {formatTime(conv.last_message_at)}
+                          {mounted ? formatTime(conv.last_message_at) : ''}
                         </span>
                       </div>
                       <div className="flex items-center justify-between mt-0.5">
@@ -340,22 +449,73 @@ export function InboxClient({
               )}
               {messages.map(msg => {
                 const isOut = msg.direction === 'outbound'
+                const mt = msg.media_type
+                const hasMedia = !!mt
+                // Cache local: mídia enviada pelo CRM (sent_by preenchido, sem metadata no banco)
+                const cachedBase64 = mediaCacheRef.current.get(msg.id)
+                // Renderiza mídia se: inbound, outbound Evolution (sent_by null), ou outbound CRM com cache
+                const canRenderMedia = hasMedia && (
+                  msg.direction === 'inbound' || msg.sent_by === null || !!cachedBase64
+                )
+                const mediaSrc = cachedBase64 ?? `/api/whatsapp/media?messageId=${msg.id}`
+                const isImage = canRenderMedia && mt?.startsWith('image/')
+                const isAudio = canRenderMedia && mt?.startsWith('audio/')
+                const isVideo = canRenderMedia && mt?.startsWith('video/')
+                const isDoc = canRenderMedia && !isImage && !isAudio && !isVideo
+                // show text body if no media to render, or if body is a user caption (not auto brackets)
+                const showBody = !canRenderMedia || (msg.body && !msg.body.startsWith('['))
+
                 return (
                   <div key={msg.id} className={cn('flex', isOut ? 'justify-end' : 'justify-start')}>
                     <div
                       className={cn(
-                        'max-w-xs xl:max-w-sm px-3.5 py-2 rounded-2xl text-sm shadow-sm',
+                        'max-w-xs xl:max-w-sm rounded-2xl text-sm shadow-sm overflow-hidden',
                         isOut
                           ? 'bg-brand-500 text-white rounded-br-sm'
                           : 'bg-white text-gray-900 rounded-bl-sm'
                       )}
                     >
                       {!isOut && msg.sender_name && (
-                        <p className="text-[10px] font-semibold text-brand-500 mb-0.5">{msg.sender_name}</p>
+                        <p className="text-[10px] font-semibold text-brand-500 px-3.5 pt-2 mb-0.5">{msg.sender_name}</p>
                       )}
-                      <p className="whitespace-pre-wrap break-words">{msg.body}</p>
-                      <div className={cn('flex items-center justify-end gap-1 mt-1', isOut ? 'text-white/60' : 'text-gray-400')}>
-                        <span className="text-[10px]">{formatMsgTime(msg.created_at)}</span>
+
+                      {isImage && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={mediaSrc}
+                          alt="imagem"
+                          className="w-full object-cover"
+                          loading="lazy"
+                        />
+                      )}
+                      {isAudio && (
+                        <div className="px-3 py-2">
+                          <audio controls src={mediaSrc} preload="metadata" className="w-full min-w-[220px]" />
+                        </div>
+                      )}
+                      {isVideo && (
+                        <video controls src={mediaSrc} preload="metadata" className="w-full" />
+                      )}
+                      {isDoc && (
+                        <a
+                          href={mediaSrc}
+                          download={msg.body.replace(/^\[Documento: /, '').replace(/\]$/, '')}
+                          className={cn(
+                            'flex items-center gap-2 px-3.5 py-2.5 hover:opacity-80 transition-opacity',
+                            isOut ? 'text-white' : 'text-brand-600'
+                          )}
+                        >
+                          <FileText className="w-5 h-5 flex-shrink-0" />
+                          <span className="text-xs truncate max-w-[180px]">{msg.body}</span>
+                        </a>
+                      )}
+
+                      {showBody && (
+                        <p className="whitespace-pre-wrap break-words px-3.5 py-2">{msg.body}</p>
+                      )}
+
+                      <div className={cn('flex items-center justify-end gap-1 px-3.5 pb-2 mt-0', isOut ? 'text-white/60' : 'text-gray-400')}>
+                        <span className="text-[10px]">{mounted ? formatMsgTime(msg.created_at) : ''}</span>
                         {isOut && (
                           msg.status === 'read' ? (
                             <CheckCheck className="w-3 h-3 text-blue-300" />
@@ -382,25 +542,91 @@ export function InboxClient({
                   {sendError}
                 </div>
               )}
+
+              {/* Pending file preview */}
+              {pendingFile && (
+                <div className="mb-2 flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl">
+                  {pendingFile.preview ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={pendingFile.preview} alt="preview" className="w-12 h-12 object-cover rounded-lg flex-shrink-0" />
+                  ) : (
+                    <FileText className="w-8 h-8 text-gray-400 flex-shrink-0" />
+                  )}
+                  <span className="text-xs text-gray-600 truncate flex-1">{pendingFile.name}</span>
+                  <button onClick={() => setPendingFile(null)} className="p-1 text-gray-400 hover:text-gray-600">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
               <div className="flex items-end gap-2">
-                <textarea
-                  value={text}
-                  onChange={e => setText(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
-                  }}
-                  placeholder="Mensagem..."
-                  rows={1}
-                  className="flex-1 resize-none border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 max-h-32 overflow-y-auto"
-                  style={{ height: 'auto' }}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  hidden
+                  accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.txt"
+                  onChange={handleFileSelect}
                 />
-                <button
-                  onClick={handleSend}
-                  disabled={!text.trim() || sending}
-                  className="p-2.5 bg-brand-500 text-white rounded-xl hover:bg-brand-600 disabled:opacity-50 transition-colors flex-shrink-0"
-                >
-                  <Send className="w-4 h-4" />
-                </button>
+
+                {recording ? (
+                  /* Recording state — full width indicator + stop button */
+                  <>
+                    <div className="flex-1 flex items-center gap-2 px-4 py-2.5 border border-red-300 bg-red-50 rounded-xl">
+                      <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse flex-shrink-0" />
+                      <span className="text-sm text-red-600 font-medium">
+                        {String(Math.floor(recordSeconds / 60)).padStart(2, '0')}:{String(recordSeconds % 60).padStart(2, '0')}
+                      </span>
+                      <span className="text-xs text-red-400">Gravando...</span>
+                    </div>
+                    <button
+                      onClick={stopRecording}
+                      className="p-2.5 bg-red-500 text-white rounded-xl hover:bg-red-600 transition-colors flex-shrink-0"
+                      title="Parar gravação"
+                    >
+                      <Square className="w-4 h-4 fill-white" />
+                    </button>
+                  </>
+                ) : (
+                  /* Normal state */
+                  <>
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={!!pendingFile}
+                      className="p-2.5 text-gray-400 hover:text-brand-500 hover:bg-brand-50 rounded-xl transition-colors flex-shrink-0 disabled:opacity-40"
+                      title="Anexar arquivo"
+                    >
+                      <Paperclip className="w-4 h-4" />
+                    </button>
+                    <textarea
+                      value={text}
+                      onChange={e => setText(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
+                      }}
+                      placeholder={pendingFile ? 'Legenda (opcional)...' : 'Mensagem...'}
+                      rows={1}
+                      className="flex-1 resize-none border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 max-h-32 overflow-y-auto"
+                      style={{ height: 'auto' }}
+                    />
+                    {text.trim() || pendingFile ? (
+                      <button
+                        onClick={handleSend}
+                        disabled={sending}
+                        className="p-2.5 bg-brand-500 text-white rounded-xl hover:bg-brand-600 disabled:opacity-50 transition-colors flex-shrink-0"
+                      >
+                        <Send className="w-4 h-4" />
+                      </button>
+                    ) : (
+                      <button
+                        onClick={startRecording}
+                        className="p-2.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors flex-shrink-0"
+                        title="Gravar áudio"
+                      >
+                        <Mic className="w-4 h-4" />
+                      </button>
+                    )}
+                  </>
+                )}
               </div>
             </div>
           </div>
