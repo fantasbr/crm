@@ -5,7 +5,8 @@ import { Deal } from '@/types/crm'
 import { paymentLabels, temperatureEmoji, temperatureColors, originLabels, originColors } from '@/lib/labels'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
-import { Phone, Mail, Calendar, MessageSquare, ArrowRight, CheckCircle, XCircle, Pencil, Check, X, FileText, ExternalLink } from 'lucide-react'
+import { Phone, Mail, Calendar, MessageSquare, ArrowRight, CheckCircle, XCircle, Pencil, Check, X, FileText, MessageCircle } from 'lucide-react'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import type { Database } from '@/lib/supabase/types'
 
@@ -133,15 +134,13 @@ export function DealDetailModal({ deal, open, onClose, onUpdated, onBudget }: De
               <span className={cn('whitespace-nowrap text-sm font-medium px-3 py-1 rounded-full', temperatureColors[deal.temperature])}>
                 {temperatureEmoji[deal.temperature]} {deal.temperature}
               </span>
-              {deal.chatwootConversationId && (
-                <a
-                  href={`${process.env.NEXT_PUBLIC_CHATWOOT_URL}/app/accounts/${process.env.NEXT_PUBLIC_CHATWOOT_ACCOUNT_ID}/conversations/${deal.chatwootConversationId}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1 whitespace-nowrap px-3 py-1 bg-indigo-500 text-white text-xs font-medium rounded-full hover:bg-indigo-600 transition-colors"
+              {deal.waConversationId && (
+                <Link
+                  href={`/inbox?conv=${deal.waConversationId}`}
+                  className="flex items-center gap-1 whitespace-nowrap px-3 py-1 bg-green-600 text-white text-xs font-medium rounded-full hover:bg-green-700 transition-colors"
                 >
-                  <ExternalLink className="w-3.5 h-3.5" /> Chatwoot
-                </a>
+                  <MessageCircle className="w-3.5 h-3.5" /> Inbox
+                </Link>
               )}
               {deal.status === 'open' && (
                 <>
@@ -190,24 +189,20 @@ export function DealDetailModal({ deal, open, onClose, onUpdated, onBudget }: De
                 <div className="flex items-center gap-2 text-sm text-gray-700">
                   <Phone className="w-3.5 h-3.5 text-gray-400" />
                   <a href={`tel:${deal.contact.phone}`} className="hover:text-brand-500">{deal.contact.phone}</a>
-                  {deal.chatwootConversationId ? (
-                    <a
-                      href={`${process.env.NEXT_PUBLIC_CHATWOOT_URL}/app/accounts/${process.env.NEXT_PUBLIC_CHATWOOT_ACCOUNT_ID}/conversations/${deal.chatwootConversationId}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="ml-1 text-xs text-indigo-500 hover:text-indigo-700 font-medium"
-                    >
-                      ver conversa
-                    </a>
-                  ) : (
-                    <a
-                      href={`https://wa.me/55${deal.contact.phone.replace(/\D/g, '')}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                  {deal.waConversationId ? (
+                    <Link
+                      href={`/inbox?conv=${deal.waConversationId}`}
                       className="ml-1 text-xs text-green-600 hover:text-green-700 font-medium"
                     >
-                      WhatsApp
-                    </a>
+                      ver no inbox
+                    </Link>
+                  ) : (
+                    <Link
+                      href={`/inbox?phone=${deal.contact.phone.replace(/\D/g, '')}`}
+                      className="ml-1 text-xs text-green-600 hover:text-green-700 font-medium"
+                    >
+                      inbox
+                    </Link>
                   )}
                 </div>
                 {deal.contact.email && (

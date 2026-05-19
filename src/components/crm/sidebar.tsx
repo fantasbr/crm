@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import {
   LayoutDashboard, Users, Kanban, UsersRound,
-  Settings, LogOut, ChevronRight
+  Settings, LogOut, ChevronRight, MessageCircle
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
@@ -12,6 +12,7 @@ import { createClient } from '@/lib/supabase/client'
 const navItems = [
   { href: '/dashboard', label: 'Dashboard',     icon: LayoutDashboard },
   { href: '/pipeline',  label: 'Pipeline',       icon: Kanban },
+  { href: '/inbox',     label: 'Inbox',           icon: MessageCircle },
   { href: '/contacts',  label: 'Contatos',       icon: Users },
   { href: '/teams',     label: 'Equipes',         icon: UsersRound },
   { href: '/settings',  label: 'Configurações',   icon: Settings },

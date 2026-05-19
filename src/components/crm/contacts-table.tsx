@@ -1,10 +1,10 @@
 'use client'
 
 import { useState } from 'react'
-import Link from 'next/link'
 import { originLabels, originColors, temperatureEmoji, temperatureColors } from '@/lib/labels'
 import { cn } from '@/lib/utils'
 import { Plus, Search, Phone, MessageCircle } from 'lucide-react'
+import Link from 'next/link'
 import type { Database } from '@/lib/supabase/types'
 
 type Contact = Database['public']['Tables']['crm_contacts']['Row']
@@ -127,17 +127,13 @@ export function ContactsTable({ contacts, deals }: ContactsTableProps) {
                   </td>
                   <td className="px-5 py-4">
                     <div className="flex items-center gap-2">
-                      <a
-                        href={contact.chatwoot_id
-                          ? `${process.env.NEXT_PUBLIC_CHATWOOT_URL}/app/accounts/${process.env.NEXT_PUBLIC_CHATWOOT_ACCOUNT_ID}/contacts/${contact.chatwoot_id}`
-                          : `https://wa.me/55${contact.phone.replace(/\D/g, '')}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                      <Link
+                        href={`/inbox?phone=${contact.phone.replace(/\D/g, '')}`}
                         className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-                        title={contact.chatwoot_id ? 'Ver no Chatwoot' : 'WhatsApp'}
+                        title="Abrir no Inbox"
                       >
                         <MessageCircle className="w-4 h-4" />
-                      </a>
+                      </Link>
                       <a
                         href={`tel:${contact.phone}`}
                         className="p-1.5 text-gray-400 hover:text-brand-500 hover:bg-brand-50 rounded-lg transition-colors"

@@ -53,16 +53,39 @@ export type Database = {
           { foreignKeyName: "crm_service_plans_service_id_fkey"; columns: ["service_id"]; isOneToOne: false; referencedRelation: "crm_services"; referencedColumns: ["id"] }
         ]
       }
+      crm_inboxes: {
+        Row: { id: string; name: string; wa_instance: string; phone: string | null; color: string; active: boolean; created_at: string }
+        Insert: { id?: string; name: string; wa_instance: string; phone?: string | null; color?: string; active?: boolean; created_at?: string }
+        Update: { id?: string; name?: string; wa_instance?: string; phone?: string | null; color?: string; active?: boolean }
+        Relationships: []
+      }
+      crm_conversations: {
+        Row: { id: string; inbox_id: string; contact_id: string | null; wa_jid: string; status: 'open' | 'resolved' | 'archived'; unread_count: number; last_message: string | null; last_message_at: string | null; created_at: string; updated_at: string }
+        Insert: { id?: string; inbox_id: string; contact_id?: string | null; wa_jid: string; status?: 'open' | 'resolved' | 'archived'; unread_count?: number; last_message?: string | null; last_message_at?: string | null; created_at?: string; updated_at?: string }
+        Update: { id?: string; inbox_id?: string; contact_id?: string | null; wa_jid?: string; status?: 'open' | 'resolved' | 'archived'; unread_count?: number; last_message?: string | null; last_message_at?: string | null; updated_at?: string }
+        Relationships: [
+          { foreignKeyName: "crm_conversations_inbox_id_fkey"; columns: ["inbox_id"]; isOneToOne: false; referencedRelation: "crm_inboxes"; referencedColumns: ["id"] },
+          { foreignKeyName: "crm_conversations_contact_id_fkey"; columns: ["contact_id"]; isOneToOne: false; referencedRelation: "crm_contacts"; referencedColumns: ["id"] }
+        ]
+      }
+      crm_messages: {
+        Row: { id: string; conversation_id: string; wa_message_id: string | null; direction: 'inbound' | 'outbound'; body: string; media_url: string | null; media_type: string | null; status: 'sent' | 'delivered' | 'read' | 'failed'; sender_name: string | null; sent_by: string | null; metadata: Json | null; created_at: string }
+        Insert: { id?: string; conversation_id: string; wa_message_id?: string | null; direction: 'inbound' | 'outbound'; body: string; media_url?: string | null; media_type?: string | null; status?: 'sent' | 'delivered' | 'read' | 'failed'; sender_name?: string | null; sent_by?: string | null; metadata?: Json | null; created_at?: string }
+        Update: { id?: string; conversation_id?: string; wa_message_id?: string | null; direction?: 'inbound' | 'outbound'; body?: string; media_url?: string | null; media_type?: string | null; status?: 'sent' | 'delivered' | 'read' | 'failed'; sender_name?: string | null; sent_by?: string | null; metadata?: Json | null }
+        Relationships: [
+          { foreignKeyName: "crm_messages_conversation_id_fkey"; columns: ["conversation_id"]; isOneToOne: false; referencedRelation: "crm_conversations"; referencedColumns: ["id"] }
+        ]
+      }
       crm_contacts: {
-        Row: { id: string; name: string; phone: string; email: string | null; origin: 'whatsapp' | 'presencial' | 'indicacao' | 'site'; chatwoot_id: string | null; created_at: string; updated_at: string }
-        Insert: { id?: string; name: string; phone: string; email?: string | null; origin?: 'whatsapp' | 'presencial' | 'indicacao' | 'site'; chatwoot_id?: string | null; created_at?: string; updated_at?: string }
-        Update: { id?: string; name?: string; phone?: string; email?: string | null; origin?: 'whatsapp' | 'presencial' | 'indicacao' | 'site'; chatwoot_id?: string | null; updated_at?: string }
+        Row: { id: string; name: string; phone: string; email: string | null; origin: 'whatsapp' | 'presencial' | 'indicacao' | 'site'; chatwoot_id: string | null; wa_phone: string | null; created_at: string; updated_at: string }
+        Insert: { id?: string; name: string; phone: string; email?: string | null; origin?: 'whatsapp' | 'presencial' | 'indicacao' | 'site'; chatwoot_id?: string | null; wa_phone?: string | null; created_at?: string; updated_at?: string }
+        Update: { id?: string; name?: string; phone?: string; email?: string | null; origin?: 'whatsapp' | 'presencial' | 'indicacao' | 'site'; chatwoot_id?: string | null; wa_phone?: string | null; updated_at?: string }
         Relationships: []
       }
       crm_deals: {
         Row: {
           id: string; contact_id: string; pipeline_id: string; stage_id: string; assigned_to: string | null
-          service_id: string | null; plan_id: string | null; chatwoot_conversation_id: string | null
+          service_id: string | null; plan_id: string | null; chatwoot_conversation_id: string | null; wa_conversation_id: string | null
           urgency: number; temperature: 'frio' | 'morno' | 'quente' | 'fechando'
           interest_point: string | null; objection: string | null; previous_experience: string | null
           payment_method: 'pix' | 'cartao_credito' | 'cartao_debito' | 'boleto' | 'dinheiro' | null
@@ -70,7 +93,7 @@ export type Database = {
         }
         Insert: {
           id?: string; contact_id: string; pipeline_id: string; stage_id: string; assigned_to?: string | null
-          service_id?: string | null; plan_id?: string | null; chatwoot_conversation_id?: string | null
+          service_id?: string | null; plan_id?: string | null; chatwoot_conversation_id?: string | null; wa_conversation_id?: string | null
           urgency?: number; temperature?: 'frio' | 'morno' | 'quente' | 'fechando'
           interest_point?: string | null; objection?: string | null; previous_experience?: string | null
           payment_method?: 'pix' | 'cartao_credito' | 'cartao_debito' | 'boleto' | 'dinheiro' | null
@@ -78,7 +101,7 @@ export type Database = {
         }
         Update: {
           id?: string; contact_id?: string; pipeline_id?: string; stage_id?: string; assigned_to?: string | null
-          service_id?: string; plan_id?: string | null; chatwoot_conversation_id?: string | null
+          service_id?: string; plan_id?: string | null; chatwoot_conversation_id?: string | null; wa_conversation_id?: string | null
           urgency?: number; temperature?: 'frio' | 'morno' | 'quente' | 'fechando'
           interest_point?: string | null; objection?: string | null; previous_experience?: string | null
           payment_method?: 'pix' | 'cartao_credito' | 'cartao_debito' | 'boleto' | 'dinheiro' | null
@@ -137,6 +160,9 @@ export type Database = {
       crm_payment_method: 'pix' | 'cartao_credito' | 'cartao_debito' | 'boleto' | 'dinheiro'
       crm_user_role: 'admin' | 'manager' | 'seller'
       crm_activity_type: 'note' | 'stage_change' | 'status_change' | 'call' | 'whatsapp' | 'email'
+      crm_message_direction: 'inbound' | 'outbound'
+      crm_message_status: 'sent' | 'delivered' | 'read' | 'failed'
+      crm_conv_status: 'open' | 'resolved' | 'archived'
     }
     CompositeTypes: Record<string, never>
   }

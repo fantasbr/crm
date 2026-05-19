@@ -191,6 +191,7 @@ export async function createDeal(deal: {
   service_id?: string | null
   plan_id?: string
   chatwoot_conversation_id?: string | null
+  wa_conversation_id?: string | null
   urgency: number
   temperature: 'frio' | 'morno' | 'quente' | 'fechando'
   interest_point?: string
@@ -224,6 +225,7 @@ export async function updateDeal(dealId: string, updates: {
   service_id?: string
   plan_id?: string | null
   chatwoot_conversation_id?: string | null
+  wa_conversation_id?: string | null
   urgency?: number
   temperature?: 'frio' | 'morno' | 'quente' | 'fechando'
   interest_point?: string
@@ -358,6 +360,53 @@ export async function getCurrentUser() {
 }
 
 // ─── Teams ────────────────────────────────────────────────────────────────────
+
+// ─── Inbox ────────────────────────────────────────────────────────────────────
+
+export async function getInboxes() {
+  const supabase = createClient()
+  const { data, error } = await supabase
+    .from('crm_inboxes')
+    .select('*')
+    .eq('active', true)
+    .order('created_at')
+  if (error) throw error
+  return data
+}
+
+export async function getOpenConversations(inboxId: string) {
+  const supabase = createClient()
+  const { data, error } = await supabase
+    .from('crm_conversations')
+    .select('*, crm_contacts(id, name, phone)')
+    .eq('inbox_id', inboxId)
+    .eq('status', 'open')
+    .order('last_message_at', { ascending: false })
+    .limit(50)
+  if (error) throw error
+  return data
+}
+
+export async function getMessages(conversationId: string) {
+  const supabase = createClient()
+  const { data, error } = await supabase
+    .from('crm_messages')
+    .select('*')
+    .eq('conversation_id', conversationId)
+    .order('created_at', { ascending: true })
+    .limit(100)
+  if (error) throw error
+  return data
+}
+
+export async function markConversationRead(conversationId: string) {
+  const supabase = createClient()
+  const { error } = await supabase
+    .from('crm_conversations')
+    .update({ unread_count: 0 })
+    .eq('id', conversationId)
+  if (error) throw error
+}
 
 export async function getTeams() {
   const supabase = createClient()

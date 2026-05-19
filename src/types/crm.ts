@@ -78,6 +78,7 @@ export interface Deal {
   serviceId: string | null
   service: Pick<Service, 'id' | 'name'> | null
   chatwootConversationId: string | null
+  waConversationId: string | null
   planId: string | null
   plan: Pick<ServicePlan, 'id' | 'name' | 'tablePrice' | 'maxDiscountPct'> | null
   urgency: 1 | 2 | 3 | 4 | 5
@@ -90,6 +91,40 @@ export interface Deal {
   status: DealStatus
   createdAt: string
   updatedAt: string
+}
+
+export interface Inbox {
+  id: string
+  name: string
+  waInstance: string
+  phone: string | null
+  color: string
+  active: boolean
+}
+
+export interface Conversation {
+  id: string
+  inboxId: string
+  contact: Pick<Contact, 'id' | 'name' | 'phone'> | null
+  waJid: string
+  status: 'open' | 'resolved' | 'archived'
+  unreadCount: number
+  lastMessage: string | null
+  lastMessageAt: string | null
+}
+
+export interface Message {
+  id: string
+  conversationId: string
+  waMessageId: string | null
+  direction: 'inbound' | 'outbound'
+  body: string
+  mediaUrl: string | null
+  mediaType: string | null
+  status: 'sent' | 'delivered' | 'read' | 'failed'
+  senderName: string | null
+  sentBy: string | null
+  createdAt: string
 }
 
 export interface BudgetPlan {

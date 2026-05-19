@@ -35,6 +35,7 @@ function dbDealToDeal(row: Record<string, unknown>): Deal {
     serviceId: row.service_id as string | null,
     service: svc ? { id: svc.id as string, name: svc.name as string } : null,
     chatwootConversationId: row.chatwoot_conversation_id as string | null,
+    waConversationId: row.wa_conversation_id as string | null,
     planId: row.plan_id as string | null,
     plan: plan ? {
       id: plan.id as string,

@@ -10,6 +10,14 @@ services:
         mode: ingress
     environment:
       NODE_ENV: production
+      # Supabase (service_role só para webhook — nunca expor no build)
+      SUPABASE_SERVICE_ROLE_KEY: ""
+      # Evolution API
+      EVOLUTION_API_URL: "http://evolution:8080"
+      EVOLUTION_API_KEY: ""
+      EVOLUTION_WEBHOOK_TOKEN: ""
+      # Descomente para ativar agente de IA:
+      # AI_AGENT_ENABLED: "true"
     deploy:
       replicas: 1
       restart_policy:

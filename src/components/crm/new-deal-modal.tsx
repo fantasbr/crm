@@ -24,17 +24,19 @@ interface NewDealModalProps {
   initialStageId?: string
   stages: CrmStage[]
   onCreated: () => void
+  prefilledContactId?: string
+  prefilledConversationId?: string
 }
 
-export function NewDealModal({ open, onClose, pipelineId, initialStageId, stages, onCreated }: NewDealModalProps) {
+export function NewDealModal({ open, onClose, pipelineId, initialStageId, stages, onCreated, prefilledContactId, prefilledConversationId }: NewDealModalProps) {
   const [users, setUsers] = useState<CrmUser[]>([])
   const [contacts, setContacts] = useState<CrmContact[]>([])
   const [services, setServices] = useState<ServiceWithPlans[]>([])
   const [submitting, setSubmitting] = useState(false)
-  const [contactMode, setContactMode] = useState<'existing' | 'new'>('existing')
+  const [contactMode, setContactMode] = useState<'existing' | 'new'>(prefilledContactId ? 'existing' : 'existing')
 
   const [form, setForm] = useState({
-    contactId: '',
+    contactId: prefilledContactId ?? '',
     newContactName: '',
     newContactPhone: '',
     newContactEmail: '',
@@ -126,6 +128,7 @@ export function NewDealModal({ open, onClose, pipelineId, initialStageId, stages
         assigned_to: form.assignedTo || null,
         service_id: form.serviceId,
         plan_id: form.planId || null,
+        wa_conversation_id: prefilledConversationId ?? null,
         urgency: form.urgency,
         temperature: form.temperature,
         interest_point: form.interestPoint || null,
