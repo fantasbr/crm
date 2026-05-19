@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { maybeRouteToAI } from '@/lib/ai-agent'
+import { emitInboxEvent } from '@/lib/realtime-bus'
 
 export const runtime = 'nodejs'
 
@@ -35,14 +36,18 @@ export async function POST(req: NextRequest) {
   const supabase = createServiceClient()
 
   // Identificar o inbox pela instância
-  const { data: inbox } = await supabase
+  const { data: inbox, error: inboxError } = await supabase
     .from('crm_inboxes')
     .select('*')
     .eq('wa_instance', instanceName)
     .eq('active', true)
     .single()
 
-  if (!inbox) return NextResponse.json({ ok: true })
+  if (!inbox) {
+    console.warn('[webhook] inbox não encontrado para instance:', instanceName, inboxError?.message)
+    return NextResponse.json({ ok: true })
+  }
+  console.log('[webhook] event:', event, '| inbox:', inbox.name, '| instance:', instanceName)
 
   // ─── messages.upsert ──────────────────────────────────────────────────────
   if (event === 'messages.upsert') {
@@ -140,6 +145,9 @@ export async function POST(req: NextRequest) {
           { onConflict: 'wa_message_id', ignoreDuplicates: true }
         )
 
+      // Notifica clientes SSE conectados
+      emitInboxEvent({ inboxId: inbox.id, conversationId: conv.id })
+
       // Ponto de extensão AI (apenas inbound)
       if (!fromMe) {
         await maybeRouteToAI(supabase, {
@@ -154,27 +162,28 @@ export async function POST(req: NextRequest) {
   }
 
   // ─── messages.update ──────────────────────────────────────────────────────
+  // Evolution API v2 payload: { keyId, remoteJid, fromMe, status, ... }
   if (event === 'messages.update') {
     const updates = Array.isArray(payload.data) ? payload.data : [payload.data]
     for (const upd of updates) {
       if (!upd) continue
       const u = upd as Record<string, unknown>
-      const key = u.key as Record<string, unknown>
-      const waMessageId = key?.id as string
-      const status = (u.update as Record<string, unknown>)?.status as string
+      const waMessageId = u.keyId as string
+      const status = u.status as string
       if (!waMessageId || !status) continue
 
-      const statusMap: Record<string, string> = {
+      const statusMap: Record<string, 'sent' | 'delivered' | 'read' | 'failed'> = {
+        SERVER_ACK:   'sent',
         DELIVERY_ACK: 'delivered',
-        READ: 'read',
-        PLAYED: 'read',
-        ERROR: 'failed',
+        READ:         'read',
+        PLAYED:       'read',
+        ERROR:        'failed',
       }
       const mapped = statusMap[status]
       if (mapped) {
         await supabase
           .from('crm_messages')
-          .update({ status: mapped as 'sent' | 'delivered' | 'read' | 'failed' })
+          .update({ status: mapped })
           .eq('wa_message_id', waMessageId)
       }
     }

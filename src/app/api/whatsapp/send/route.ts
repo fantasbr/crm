@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createServiceClient } from '@/lib/supabase/service'
+import { emitInboxEvent } from '@/lib/realtime-bus'
 
 export const runtime = 'nodejs'
 
@@ -36,22 +37,33 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Evolution API not configured' }, { status: 500 })
   }
 
+  // Evolution API espera apenas os dígitos, sem o sufixo @s.whatsapp.net
+  const number = conv.wa_jid.split('@')[0].replace(/\D/g, '')
+  const endpoint = `${evolutionUrl}/message/sendText/${inbox.wa_instance}`
+
   // Enviar mensagem via Evolution API
-  const sendRes = await fetch(
-    `${evolutionUrl}/message/sendText/${inbox.wa_instance}`,
-    {
+  let sendRes: Response
+  try {
+    sendRes = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'apikey': evolutionKey },
-      body: JSON.stringify({ number: conv.wa_jid, text }),
-    }
-  )
+      body: JSON.stringify({ number, text }),
+    })
+  } catch (err) {
+    console.error('[send] falha de rede ao chamar Evolution API:', endpoint, err)
+    return NextResponse.json({ error: 'Não foi possível conectar à Evolution API', detail: String(err) }, { status: 502 })
+  }
 
   if (!sendRes.ok) {
     const errBody = await sendRes.text()
-    return NextResponse.json({ error: 'Evolution API error', detail: errBody }, { status: 502 })
+    console.error('[send] Evolution API retornou erro', sendRes.status, '|', endpoint, '|', errBody)
+    return NextResponse.json(
+      { error: `Evolution API ${sendRes.status}`, detail: errBody },
+      { status: 502 }
+    )
   }
 
-  const sendData = await sendRes.json() as Record<string, unknown>
+  const sendData = await sendRes.json().catch(() => ({})) as Record<string, unknown>
   const waMessageId = (sendData.key as Record<string, unknown>)?.id as string | undefined
 
   const now = new Date().toISOString()
@@ -71,6 +83,9 @@ export async function POST(req: NextRequest) {
     .from('crm_conversations')
     .update({ last_message: text, last_message_at: now, unread_count: 0 })
     .eq('id', conversationId)
+
+  // Notifica clientes SSE conectados
+  emitInboxEvent({ inboxId: conv.inbox_id, conversationId })
 
   return NextResponse.json({ ok: true })
 }

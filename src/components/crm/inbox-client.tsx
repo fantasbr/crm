@@ -58,6 +58,7 @@ export function InboxClient({
   const [messages, setMessages] = useState<DbMessage[]>([])
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
+  const [sendError, setSendError] = useState<string | null>(null)
   const [loadingMsgs, setLoadingMsgs] = useState(false)
   const [search, setSearch] = useState('')
   const [newDealOpen, setNewDealOpen] = useState(false)
@@ -65,6 +66,10 @@ export function InboxClient({
 
   const activeConv = conversations.find(c => c.id === activeConvId) ?? null
   const activeInbox = inboxes.find(i => i.id === activeInboxId) ?? null
+
+  // Ref para acessar a conversa ativa dentro do handler do EventSource
+  const activeConvIdRef = useRef(activeConvId)
+  useEffect(() => { activeConvIdRef.current = activeConvId }, [activeConvId])
 
   // ─── Load conversations when inbox changes ────────────────────────────────
   const loadConversations = useCallback(async (inboxId: string) => {
@@ -76,6 +81,17 @@ export function InboxClient({
       .order('last_message_at', { ascending: false })
       .limit(50)
     setConversations((data ?? []) as DbConversation[])
+  }, [supabase])
+
+  // ─── Load messages for a conversation ─────────────────────────────────────
+  const loadMessages = useCallback(async (convId: string) => {
+    const { data } = await supabase
+      .from('crm_messages')
+      .select('*')
+      .eq('conversation_id', convId)
+      .order('created_at', { ascending: true })
+      .limit(100)
+    setMessages(data ?? [])
   }, [supabase])
 
   useEffect(() => {
@@ -95,16 +111,7 @@ export function InboxClient({
   useEffect(() => {
     if (!activeConvId) return
     setLoadingMsgs(true)
-    supabase
-      .from('crm_messages')
-      .select('*')
-      .eq('conversation_id', activeConvId)
-      .order('created_at', { ascending: true })
-      .limit(100)
-      .then(({ data }) => {
-        setMessages(data ?? [])
-        setLoadingMsgs(false)
-      })
+    loadMessages(activeConvId).finally(() => setLoadingMsgs(false))
 
     // Mark as read
     supabase.from('crm_conversations').update({ unread_count: 0 }).eq('id', activeConvId)
@@ -114,53 +121,39 @@ export function InboxClient({
     params.set('conv', activeConvId)
     params.delete('phone')
     router.replace(`/inbox?${params.toString()}`, { scroll: false })
-  }, [activeConvId, supabase, router, searchParams])
+  }, [activeConvId, supabase, router, searchParams, loadMessages])
 
   // ─── Scroll to bottom on new messages ────────────────────────────────────
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  // ─── Realtime: conversations (current inbox) ──────────────────────────────
+  // ─── Tempo real via SSE (backend do CRM, sem WebSocket do Supabase) ───────
   useEffect(() => {
     if (!activeInboxId) return
-    const channel = supabase
-      .channel(`conversations:${activeInboxId}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'crm_conversations', filter: `inbox_id=eq.${activeInboxId}` },
-        async () => { await loadConversations(activeInboxId) }
-      )
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
-  }, [activeInboxId, supabase, loadConversations])
+    const es = new EventSource(`/api/whatsapp/stream?inboxId=${activeInboxId}`)
 
-  // ─── Realtime: messages (active conversation) ─────────────────────────────
-  useEffect(() => {
-    if (!activeConvId) return
-    const channel = supabase
-      .channel(`messages:${activeConvId}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'crm_messages', filter: `conversation_id=eq.${activeConvId}` },
-        (payload) => {
-          setMessages(prev => {
-            const msg = payload.new as DbMessage
-            if (prev.some(m => m.id === msg.id)) return prev
-            return [...prev, msg]
-          })
-          // Mark as read
-          supabase.from('crm_conversations').update({ unread_count: 0 }).eq('id', activeConvId)
-        }
-      )
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
-  }, [activeConvId, supabase])
+    es.onmessage = (e) => {
+      let ev: { inboxId: string; conversationId: string }
+      try { ev = JSON.parse(e.data) } catch { return }
+
+      loadConversations(activeInboxId)
+
+      if (ev.conversationId === activeConvIdRef.current) {
+        loadMessages(ev.conversationId)
+        supabase.from('crm_conversations').update({ unread_count: 0 }).eq('id', ev.conversationId)
+      }
+    }
+
+    // EventSource reconecta sozinho em caso de queda
+    return () => es.close()
+  }, [activeInboxId, supabase, loadConversations, loadMessages])
 
   // ─── Send message ─────────────────────────────────────────────────────────
   const handleSend = async () => {
     if (!text.trim() || !activeConvId || sending) return
     setSending(true)
+    setSendError(null)
     const body = text.trim()
     setText('')
     try {
@@ -171,8 +164,19 @@ export function InboxClient({
       })
       if (!res.ok) {
         setText(body)
-        console.error('Send failed', await res.text())
+        let msg = `Erro ${res.status}`
+        try {
+          const j = await res.json()
+          msg = j.detail ? `${j.error}: ${j.detail}` : (j.error ?? msg)
+        } catch { /* corpo não-JSON */ }
+        setSendError(msg)
+        console.error('Send failed', msg)
+      } else {
+        loadMessages(activeConvId)
       }
+    } catch (err) {
+      setText(body)
+      setSendError(String(err))
     } finally {
       setSending(false)
     }
@@ -373,6 +377,11 @@ export function InboxClient({
 
             {/* Input */}
             <div className="p-3 border-t border-gray-200 bg-white flex-shrink-0">
+              {sendError && (
+                <div className="mb-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 break-words">
+                  {sendError}
+                </div>
+              )}
               <div className="flex items-end gap-2">
                 <textarea
                   value={text}
