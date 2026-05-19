@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { NewDealModal } from '@/components/crm/new-deal-modal'
 import { cn } from '@/lib/utils'
-import { Send, Plus, Phone, CheckCheck, Clock, Search, Paperclip, FileText, X, Mic, Square } from 'lucide-react'
+import { Send, Plus, Phone, CheckCheck, Clock, Search, Paperclip, FileText, X, Mic, Square, CheckCircle, RotateCcw } from 'lucide-react'
 import type { Database } from '@/lib/supabase/types'
 
 type DbInbox = Database['public']['Tables']['crm_inboxes']['Row']
@@ -61,6 +61,7 @@ export function InboxClient({
   const [sendError, setSendError] = useState<string | null>(null)
   const [loadingMsgs, setLoadingMsgs] = useState(false)
   const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState<'open' | 'resolved'>('open')
   const [newDealOpen, setNewDealOpen] = useState(false)
   const [mounted, setMounted] = useState(false)
   const [pendingFile, setPendingFile] = useState<{ base64: string; type: string; name: string; preview?: string } | null>(null)
@@ -72,6 +73,7 @@ export function InboxClient({
   const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   // Cache base64 de mídias enviadas pelo CRM (outbound, sem metadata no banco)
   const mediaCacheRef = useRef<Map<string, string>>(new Map())
+  const statusFilterRef = useRef<'open' | 'resolved'>('open')
 
   const activeConv = conversations.find(c => c.id === activeConvId) ?? null
   const activeInbox = inboxes.find(i => i.id === activeInboxId) ?? null
@@ -85,17 +87,19 @@ export function InboxClient({
     }
   }, [])
 
-  // Ref para acessar a conversa ativa dentro do handler do EventSource
+  // Refs para acessar valores atuais dentro de closures (SSE handlers)
   const activeConvIdRef = useRef(activeConvId)
   useEffect(() => { activeConvIdRef.current = activeConvId }, [activeConvId])
 
-  // ─── Load conversations when inbox changes ────────────────────────────────
+  useEffect(() => { statusFilterRef.current = statusFilter }, [statusFilter])
+
+  // ─── Load conversations when inbox or filter changes ─────────────────────
   const loadConversations = useCallback(async (inboxId: string) => {
     const { data } = await supabase
       .from('crm_conversations')
       .select('*, crm_contacts(id, name, phone)')
       .eq('inbox_id', inboxId)
-      .eq('status', 'open')
+      .eq('status', statusFilterRef.current)
       .order('last_message_at', { ascending: false })
       .limit(50)
     setConversations((data ?? []) as DbConversation[])
@@ -113,8 +117,11 @@ export function InboxClient({
   }, [supabase])
 
   useEffect(() => {
-    if (activeInboxId) loadConversations(activeInboxId)
-  }, [activeInboxId, loadConversations])
+    if (activeInboxId) {
+      setActiveConvId(null)   // deseleciona ao mudar filtro ou inbox
+      loadConversations(activeInboxId)
+    }
+  }, [activeInboxId, statusFilter, loadConversations])
 
   // ─── Auto-select from URL params ─────────────────────────────────────────
   useEffect(() => {
@@ -291,6 +298,18 @@ export function InboxClient({
     }
   }
 
+  // ─── Concluir / Reabrir conversa ─────────────────────────────────────────
+  const handleToggleStatus = async () => {
+    if (!activeConvId || !activeConv) return
+    const newStatus = activeConv.status === 'open' ? 'resolved' : 'open'
+    await supabase
+      .from('crm_conversations')
+      .update({ status: newStatus })
+      .eq('id', activeConvId)
+    setActiveConvId(null)
+    loadConversations(activeInboxId)
+  }
+
   // ─── Filtered conversations ───────────────────────────────────────────────
   const filtered = conversations.filter(c => {
     if (!search) return true
@@ -338,6 +357,32 @@ export function InboxClient({
       <div className="flex flex-1 overflow-hidden">
         {/* Conversation list */}
         <div className="w-72 xl:w-80 flex-shrink-0 border-r border-gray-200 flex flex-col bg-white">
+          {/* Status filter */}
+          <div className="flex p-2 gap-1 border-b border-gray-100">
+            <button
+              onClick={() => setStatusFilter('open')}
+              className={cn(
+                'flex-1 py-1.5 text-xs font-medium rounded-lg transition-colors',
+                statusFilter === 'open'
+                  ? 'bg-brand-500 text-white'
+                  : 'text-gray-500 hover:bg-gray-100'
+              )}
+            >
+              Abertas
+            </button>
+            <button
+              onClick={() => setStatusFilter('resolved')}
+              className={cn(
+                'flex-1 py-1.5 text-xs font-medium rounded-lg transition-colors',
+                statusFilter === 'resolved'
+                  ? 'bg-gray-700 text-white'
+                  : 'text-gray-500 hover:bg-gray-100'
+              )}
+            >
+              Concluídas
+            </button>
+          </div>
+          {/* Search */}
           <div className="p-3 border-b border-gray-100">
             <div className="relative">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
@@ -433,6 +478,20 @@ export function InboxClient({
                   </a>
                 )}
                 <button
+                  onClick={handleToggleStatus}
+                  className={cn(
+                    'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors',
+                    activeConv.status === 'open'
+                      ? 'border-gray-200 text-gray-600 hover:bg-gray-50 hover:border-gray-300'
+                      : 'border-green-200 text-green-700 bg-green-50 hover:bg-green-100'
+                  )}
+                >
+                  {activeConv.status === 'open'
+                    ? <><CheckCircle className="w-3.5 h-3.5" />Concluir</>
+                    : <><RotateCcw className="w-3.5 h-3.5" />Reabrir</>
+                  }
+                </button>
+                <button
                   onClick={() => setNewDealOpen(true)}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-500 text-white text-xs font-medium rounded-lg hover:bg-brand-600 transition-colors"
                 >
@@ -514,7 +573,20 @@ export function InboxClient({
                         <p className="whitespace-pre-wrap break-words px-3.5 py-2">{msg.body}</p>
                       )}
 
-                      <div className={cn('flex items-center justify-end gap-1 px-3.5 pb-2 mt-0', isOut ? 'text-white/60' : 'text-gray-400')}>
+                      <div className={cn('flex items-center justify-end gap-1.5 px-3.5 pb-2 mt-0', isOut ? 'text-white/60' : 'text-gray-400')}>
+                        {/* Inbox indicator — mostra só quando a mensagem tem inbox gravado */}
+                        {msg.inbox_id && (() => {
+                          const msgInbox = inboxes.find(i => i.id === msg.inbox_id)
+                          return msgInbox ? (
+                            <span className="flex items-center gap-0.5 text-[9px] opacity-70">
+                              <span
+                                className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                                style={{ backgroundColor: isOut ? 'currentColor' : msgInbox.color }}
+                              />
+                              {msgInbox.name}
+                            </span>
+                          ) : null
+                        })()}
                         <span className="text-[10px]">{mounted ? formatMsgTime(msg.created_at) : ''}</span>
                         {isOut && (
                           msg.status === 'read' ? (

@@ -104,32 +104,61 @@ export async function POST(req: NextRequest) {
       const { body, mediaType, mediaUrl } = extractMediaInfo(msg)
       const waPhone = normalizePhone(remoteJid)
 
-      // Encontrar ou criar contato — nunca sobrescreve phone/name existentes
+      // Encontrar ou criar contato
+      // pushName em mensagens fromMe = nome da empresa; só é confiável para inbound
+      const contactName = !fromMe ? (pushName ?? waPhone) : waPhone
+
       let contactId: string | null = null
       const { data: existingContact } = await supabase
         .from('crm_contacts')
-        .select('id')
+        .select('id, name')
         .eq('wa_phone', waPhone)
         .maybeSingle()
       if (existingContact) {
         contactId = existingContact.id
+        // Corrige nome placeholder (= telefone) se agora temos o nome real via inbound
+        if (!fromMe && pushName && existingContact.name === waPhone) {
+          await supabase
+            .from('crm_contacts')
+            .update({ name: pushName })
+            .eq('id', contactId)
+        }
       } else {
         const { data: newContact } = await supabase
           .from('crm_contacts')
-          .insert({ wa_phone: waPhone, name: pushName ?? waPhone, phone: waPhone, origin: 'whatsapp' })
+          .insert({ wa_phone: waPhone, name: contactName, phone: waPhone, origin: 'whatsapp' })
           .select('id')
           .single()
         if (newContact) contactId = newContact.id
       }
 
-      // Encontrar ou criar conversa — incremento correto de unread_count
+      // 1 conversa por contato: busca pela conversa mais recente do contato
+      // (independente de inbox). Só cria nova se o contato nunca teve conversa.
       const now = new Date().toISOString()
-      const { data: existingConv } = await supabase
-        .from('crm_conversations')
-        .select('id, unread_count')
-        .eq('inbox_id', inbox.id)
-        .eq('wa_jid', remoteJid)
-        .maybeSingle()
+
+      // Prioridade 1 — pelo contact_id (qualquer inbox)
+      let existingConv: { id: string; unread_count: number } | null = null
+      if (contactId) {
+        const { data } = await supabase
+          .from('crm_conversations')
+          .select('id, unread_count')
+          .eq('contact_id', contactId)
+          .order('last_message_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        existingConv = data
+      }
+
+      // Fallback — pela chave (inbox_id, wa_jid) para contatos sem contact_id
+      if (!existingConv) {
+        const { data } = await supabase
+          .from('crm_conversations')
+          .select('id, unread_count')
+          .eq('inbox_id', inbox.id)
+          .eq('wa_jid', remoteJid)
+          .maybeSingle()
+        existingConv = data
+      }
 
       let conv: { id: string } | null = null
       if (existingConv) {
@@ -137,10 +166,16 @@ export async function POST(req: NextRequest) {
         await supabase
           .from('crm_conversations')
           .update({
+            // Atualiza inbox e jid para que respostas saiam pelo canal correto
+            inbox_id: inbox.id,
+            wa_jid: remoteJid,
             contact_id: contactId,
             last_message: body,
             last_message_at: now,
-            ...(!fromMe ? { unread_count: (existingConv.unread_count ?? 0) + 1 } : {}),
+            ...(!fromMe ? {
+              unread_count: (existingConv.unread_count ?? 0) + 1,
+              status: 'open',   // reabre automaticamente se o cliente responder
+            } : {}),
           })
           .eq('id', existingConv.id)
       } else {
@@ -167,6 +202,7 @@ export async function POST(req: NextRequest) {
         .upsert(
           {
             conversation_id: conv.id,
+            inbox_id: inbox.id,
             wa_message_id: waMessageId,
             direction: fromMe ? 'outbound' : 'inbound',
             body,
@@ -236,13 +272,19 @@ export async function POST(req: NextRequest) {
       if (pushName) {
         const { data: existing } = await supabase
           .from('crm_contacts')
-          .select('id')
+          .select('id, name')
           .eq('wa_phone', waPhone)
           .maybeSingle()
         if (!existing) {
           await supabase
             .from('crm_contacts')
             .insert({ wa_phone: waPhone, name: pushName, phone: waPhone, origin: 'whatsapp' })
+        } else if (existing.name === waPhone) {
+          // Nome era placeholder; atualiza para o nome real
+          await supabase
+            .from('crm_contacts')
+            .update({ name: pushName })
+            .eq('id', existing.id)
         }
       }
     }

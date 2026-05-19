@@ -69,11 +69,12 @@ export type Database = {
         ]
       }
       crm_messages: {
-        Row: { id: string; conversation_id: string; wa_message_id: string | null; direction: 'inbound' | 'outbound'; body: string; media_url: string | null; media_type: string | null; status: 'sent' | 'delivered' | 'read' | 'failed'; sender_name: string | null; sent_by: string | null; metadata: Json | null; created_at: string }
-        Insert: { id?: string; conversation_id: string; wa_message_id?: string | null; direction: 'inbound' | 'outbound'; body: string; media_url?: string | null; media_type?: string | null; status?: 'sent' | 'delivered' | 'read' | 'failed'; sender_name?: string | null; sent_by?: string | null; metadata?: Json | null; created_at?: string }
-        Update: { id?: string; conversation_id?: string; wa_message_id?: string | null; direction?: 'inbound' | 'outbound'; body?: string; media_url?: string | null; media_type?: string | null; status?: 'sent' | 'delivered' | 'read' | 'failed'; sender_name?: string | null; sent_by?: string | null; metadata?: Json | null }
+        Row: { id: string; conversation_id: string; inbox_id: string | null; wa_message_id: string | null; direction: 'inbound' | 'outbound'; body: string; media_url: string | null; media_type: string | null; status: 'sent' | 'delivered' | 'read' | 'failed'; sender_name: string | null; sent_by: string | null; metadata: Json | null; created_at: string }
+        Insert: { id?: string; conversation_id: string; inbox_id?: string | null; wa_message_id?: string | null; direction: 'inbound' | 'outbound'; body: string; media_url?: string | null; media_type?: string | null; status?: 'sent' | 'delivered' | 'read' | 'failed'; sender_name?: string | null; sent_by?: string | null; metadata?: Json | null; created_at?: string }
+        Update: { id?: string; conversation_id?: string; inbox_id?: string | null; wa_message_id?: string | null; direction?: 'inbound' | 'outbound'; body?: string; media_url?: string | null; media_type?: string | null; status?: 'sent' | 'delivered' | 'read' | 'failed'; sender_name?: string | null; sent_by?: string | null; metadata?: Json | null }
         Relationships: [
-          { foreignKeyName: "crm_messages_conversation_id_fkey"; columns: ["conversation_id"]; isOneToOne: false; referencedRelation: "crm_conversations"; referencedColumns: ["id"] }
+          { foreignKeyName: "crm_messages_conversation_id_fkey"; columns: ["conversation_id"]; isOneToOne: false; referencedRelation: "crm_conversations"; referencedColumns: ["id"] },
+          { foreignKeyName: "crm_messages_inbox_id_fkey"; columns: ["inbox_id"]; isOneToOne: false; referencedRelation: "crm_inboxes"; referencedColumns: ["id"] }
         ]
       }
       crm_contacts: {

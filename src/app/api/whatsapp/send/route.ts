@@ -140,6 +140,7 @@ export async function POST(req: NextRequest) {
     .from('crm_messages')
     .insert({
       conversation_id: conversationId,
+      inbox_id: conv.inbox_id,
       wa_message_id: waMessageId ?? null,
       direction: 'outbound',
       body: msgBody,
