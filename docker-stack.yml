@@ -15,7 +15,6 @@ services:
       # Evolution API
       EVOLUTION_API_URL: "http://evolution:8080"
       EVOLUTION_API_KEY: ""
-      EVOLUTION_WEBHOOK_TOKEN: ""
       # Descomente para ativar agente de IA:
       # AI_AGENT_ENABLED: "true"
     deploy:

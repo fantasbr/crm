@@ -20,14 +20,6 @@ function extractBody(message: Record<string, unknown>): string {
 }
 
 export async function POST(req: NextRequest) {
-  // Validação do token via query param
-  // Configure o webhook na Evolution API como:
-  //   https://seu-crm.com/api/whatsapp/webhook?token=<EVOLUTION_WEBHOOK_TOKEN>
-  const token = req.nextUrl.searchParams.get('token')
-  if (token !== process.env.EVOLUTION_WEBHOOK_TOKEN) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
   let payload: Record<string, unknown>
   try {
     payload = await req.json()

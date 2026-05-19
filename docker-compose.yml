@@ -1,0 +1,67 @@
+# ============================================
+# Docker Compose - CRM Comercial
+# ============================================
+# Uso: docker stack deploy -c docker-compose.yml crm
+
+version: "3.8"
+
+services:
+  crm_app:
+    image: angelomoreirafilho/crm:v1.2.1
+
+    networks:
+      - BrancaNet
+
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL:-https://supa.brancaautoescola.com.br}
+      - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      - NEXT_PUBLIC_CHATWOOT_URL=${NEXT_PUBLIC_CHATWOOT_URL:-https://chat.brancaautoescola.com.br}
+      - NEXT_PUBLIC_CHATWOOT_ACCOUNT_ID=${NEXT_PUBLIC_CHATWOOT_ACCOUNT_ID:-1}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - EVOLUTION_API_URL=${EVOLUTION_API_URL:-http://evolution:8080}
+      - EVOLUTION_API_KEY=${EVOLUTION_API_KEY}
+      - EVOLUTION_WEBHOOK_TOKEN=${EVOLUTION_WEBHOOK_TOKEN}
+      - AI_AGENT_ENABLED=${AI_AGENT_ENABLED:-false}
+
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        delay: 5s
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+        reservations:
+          memory: 128M
+
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.crm_app.rule=Host(`crm.brancaautoescola.com.br`)"
+        - "traefik.http.routers.crm_app.entrypoints=websecure"
+        - "traefik.http.routers.crm_app.tls.certresolver=letsencryptresolver"
+        - "traefik.http.services.crm_app.loadbalancer.server.port=3000"
+        - "traefik.docker.network=BrancaNet"
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO/dev/null http://localhost:3000/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+networks:
+  BrancaNet:
+    external: true
