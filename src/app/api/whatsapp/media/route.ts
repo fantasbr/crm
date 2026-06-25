@@ -15,11 +15,36 @@ export async function GET(req: NextRequest) {
   // Auth client first: RLS verifica se o usuário tem acesso à mensagem
   const { data: msgAuth } = await supabaseAuth
     .from('crm_messages')
-    .select('id, metadata, media_type, conversation_id')
+    .select('id, metadata, media_type, media_url, conversation_id')
     .eq('id', messageId)
     .single()
 
   if (!msgAuth) return new Response('Not found', { status: 404 })
+
+  // Caminho rápido: MinIO URL já disponível — proxy direto, sem chamar a Evolution API
+  if (msgAuth.media_url) {
+    let minioRes: Response
+    try {
+      minioRes = await fetch(msgAuth.media_url)
+    } catch (err) {
+      console.error('[media] falha ao buscar do MinIO:', err)
+      return new Response('Erro ao buscar mídia', { status: 502 })
+    }
+    if (!minioRes.ok) {
+      console.error('[media] MinIO retornou', minioRes.status, msgAuth.media_url)
+      return new Response('Mídia não encontrada no storage', { status: 502 })
+    }
+    const mimetype = msgAuth.media_type ?? minioRes.headers.get('Content-Type') ?? 'application/octet-stream'
+    return new Response(minioRes.body, {
+      headers: {
+        'Content-Type': mimetype,
+        'Cache-Control': 'private, max-age=86400',
+        'Content-Length': minioRes.headers.get('Content-Length') ?? '',
+      },
+    })
+  }
+
+  // Fallback: sem URL no banco — busca base64 via Evolution API (mensagens antigas)
   if (!msgAuth.metadata) return new Response('Sem metadados de mídia', { status: 404 })
 
   // Service client apenas para buscar o wa_instance (não exposto via RLS diretamente)
@@ -30,8 +55,6 @@ export async function GET(req: NextRequest) {
     .select('crm_inboxes(wa_instance)')
     .eq('id', msgAuth.conversation_id)
     .single()
-
-  const msg = { metadata: msgAuth.metadata, media_type: msgAuth.media_type }
 
   const waInstance = (conv?.crm_inboxes as { wa_instance: string } | null)?.wa_instance
   if (!waInstance) return new Response('Inbox not found', { status: 404 })
@@ -46,7 +69,7 @@ export async function GET(req: NextRequest) {
     fetchRes = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: evolutionKey },
-      body: JSON.stringify({ message: msg.metadata, convertToMp4: false }),
+      body: JSON.stringify({ message: msgAuth.metadata, convertToMp4: false }),
     })
   } catch (err) {
     console.error('[media] falha ao buscar mídia:', err)
@@ -63,7 +86,7 @@ export async function GET(req: NextRequest) {
   if (!result.base64) return new Response('Sem dados de mídia', { status: 404 })
 
   const buffer = Buffer.from(result.base64, 'base64')
-  const mimetype = result.mimetype ?? msg.media_type ?? 'application/octet-stream'
+  const mimetype = result.mimetype ?? msgAuth.media_type ?? 'application/octet-stream'
 
   return new Response(buffer, {
     headers: {

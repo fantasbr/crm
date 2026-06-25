@@ -1,7 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { NewDealModal } from '@/components/crm/new-deal-modal'
 import { cn } from '@/lib/utils'
@@ -48,9 +47,7 @@ export function InboxClient({
   pipelineId,
   stages,
 }: InboxClientProps) {
-  const router = useRouter()
-  const searchParams = useSearchParams()
-  const supabase = createClient()
+  const supabase = useMemo(() => createClient(), [])
 
   const [activeInboxId, setActiveInboxId] = useState(initialInboxId ?? '')
   const [conversations, setConversations] = useState<DbConversation[]>(initialConversations)
@@ -69,8 +66,10 @@ export function InboxClient({
   const [recordSeconds, setRecordSeconds] = useState(0)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const activeConvIdRef2 = useRef(activeConvId)
   // Cache base64 de mídias enviadas pelo CRM (outbound, sem metadata no banco)
   const mediaCacheRef = useRef<Map<string, string>>(new Map())
   const statusFilterRef = useRef<'open' | 'resolved'>('open')
@@ -89,7 +88,10 @@ export function InboxClient({
 
   // Refs para acessar valores atuais dentro de closures (SSE handlers)
   const activeConvIdRef = useRef(activeConvId)
-  useEffect(() => { activeConvIdRef.current = activeConvId }, [activeConvId])
+  useEffect(() => {
+    activeConvIdRef.current = activeConvId
+    activeConvIdRef2.current = activeConvId
+  }, [activeConvId])
 
   useEffect(() => { statusFilterRef.current = statusFilter }, [statusFilter])
 
@@ -116,11 +118,14 @@ export function InboxClient({
     setMessages(data ?? [])
   }, [supabase])
 
+  // Deseleciona conversa quando o usuário muda de inbox ou filtro
   useEffect(() => {
-    if (activeInboxId) {
-      setActiveConvId(null)   // deseleciona ao mudar filtro ou inbox
-      loadConversations(activeInboxId)
-    }
+    setActiveConvId(null)
+  }, [activeInboxId, statusFilter])
+
+  // Recarrega a lista de conversas
+  useEffect(() => {
+    if (activeInboxId) loadConversations(activeInboxId)
   }, [activeInboxId, statusFilter, loadConversations])
 
   // ─── Auto-select from URL params ─────────────────────────────────────────
@@ -141,12 +146,13 @@ export function InboxClient({
     // Mark as read
     supabase.from('crm_conversations').update({ unread_count: 0 }).eq('id', activeConvId)
 
-    // Update URL
-    const params = new URLSearchParams(searchParams.toString())
+    // Atualiza a URL sem acionar re-fetch do RSC (router.replace com force-dynamic
+    // causa remontagem via Suspense e o efeito de deselect limpa activeConvId).
+    const params = new URLSearchParams(window.location.search)
     params.set('conv', activeConvId)
     params.delete('phone')
-    router.replace(`/inbox?${params.toString()}`, { scroll: false })
-  }, [activeConvId, supabase, router, searchParams, loadMessages])
+    history.replaceState(null, '', `/inbox?${params.toString()}`)
+  }, [activeConvId, supabase, loadMessages])
 
   // ─── Scroll to bottom on new messages ────────────────────────────────────
   useEffect(() => {
@@ -164,9 +170,16 @@ export function InboxClient({
 
       loadConversations(activeInboxId)
 
-      if (ev.conversationId === activeConvIdRef.current) {
-        loadMessages(ev.conversationId)
-        supabase.from('crm_conversations').update({ unread_count: 0 }).eq('id', ev.conversationId)
+      // Sempre recarrega a conversa aberta — o webhook pode ter encontrado uma
+      // conversa diferente via dedup "1 por contato", então não filtramos por
+      // ev.conversationId === activeConvId (isso causava mensagens sumindo).
+      const currentConvId = activeConvIdRef.current
+      if (currentConvId) {
+        loadMessages(currentConvId)
+        // Marca como lida apenas se o evento é especificamente para esta conversa
+        if (ev.conversationId === currentConvId) {
+          supabase.from('crm_conversations').update({ unread_count: 0 }).eq('id', currentConvId)
+        }
       }
     }
 
@@ -214,10 +227,12 @@ export function InboxClient({
         const blob = new Blob(chunks, { type: mimeType })
         const reader = new FileReader()
         reader.onload = (ev) => {
+          const audioMime = mimeType.split(';')[0]  // "audio/webm" or "audio/ogg"
+          const ext = audioMime === 'audio/webm' ? 'webm' : 'ogg'
           setPendingFile({
             base64: ev.target?.result as string,
-            type: mimeType.split(';')[0],  // "audio/webm" or "audio/ogg"
-            name: 'audio.ogg',
+            type: audioMime,
+            name: `audio.${ext}`,
           })
         }
         reader.readAsDataURL(blob)
@@ -287,7 +302,9 @@ export function InboxClient({
         if (hasMedia && snapshotFile && j.messageId) {
           mediaCacheRef.current.set(j.messageId, snapshotFile.base64)
         }
-        loadMessages(activeConvId)
+        // Usa ref para pegar o convId atual (pode ter mudado durante o await)
+        const convIdNow = activeConvIdRef2.current
+        if (convIdNow) loadMessages(convIdNow)
       }
     } catch (err) {
       setText(savedText)
@@ -316,7 +333,8 @@ export function InboxClient({
     const q = search.toLowerCase()
     const name = c.crm_contacts?.name?.toLowerCase() ?? ''
     const phone = c.crm_contacts?.phone ?? ''
-    return name.includes(q) || phone.includes(q)
+    const jidPhone = c.wa_jid.split('@')[0]
+    return name.includes(q) || phone.includes(q) || jidPhone.includes(q)
   })
 
   if (inboxes.length === 0) {
@@ -338,7 +356,7 @@ export function InboxClient({
             className={cn(
               'flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-t-lg border-b-2 transition-colors whitespace-nowrap',
               activeInboxId === inbox.id
-                ? 'border-b-2 text-gray-900'
+                ? 'text-gray-900'
                 : 'border-transparent text-gray-500 hover:text-gray-700'
             )}
             style={activeInboxId === inbox.id ? { borderBottomColor: inbox.color } : {}}
@@ -610,8 +628,11 @@ export function InboxClient({
             {/* Input */}
             <div className="p-3 border-t border-gray-200 bg-white flex-shrink-0">
               {sendError && (
-                <div className="mb-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 break-words">
-                  {sendError}
+                <div className="mb-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 break-words flex items-start justify-between gap-2">
+                  <span>{sendError}</span>
+                  <button onClick={() => setSendError(null)} className="flex-shrink-0 text-red-400 hover:text-red-600">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               )}
 
@@ -670,15 +691,20 @@ export function InboxClient({
                       <Paperclip className="w-4 h-4" />
                     </button>
                     <textarea
+                      ref={textareaRef}
                       value={text}
-                      onChange={e => setText(e.target.value)}
+                      onChange={e => {
+                        setText(e.target.value)
+                        e.target.style.height = 'auto'
+                        e.target.style.height = Math.min(e.target.scrollHeight, 128) + 'px'
+                      }}
                       onKeyDown={e => {
                         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
                       }}
                       placeholder={pendingFile ? 'Legenda (opcional)...' : 'Mensagem...'}
                       rows={1}
-                      className="flex-1 resize-none border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 max-h-32 overflow-y-auto"
-                      style={{ height: 'auto' }}
+                      className="flex-1 resize-none border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 overflow-y-auto"
+                      style={{ height: 'auto', maxHeight: '128px' }}
                     />
                     {text.trim() || pendingFile ? (
                       <button

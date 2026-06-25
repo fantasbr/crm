@@ -14,7 +14,7 @@ type MediaInfo = { body: string; mediaType: string | null; mediaUrl: string | nu
 
 function extractMediaInfo(msg: Record<string, unknown>): MediaInfo {
   const message = msg.message as Record<string, unknown> | undefined
-  // S3/MinIO URL injected by Evolution API when storage is configured
+  // send.message coloca mediaUrl dentro de message; messages.upsert coloca no topo
   const s3Url = (msg.mediaUrl as string | undefined) ?? null
 
   if (!message) return { body: '[mídia]', mediaType: null, mediaUrl: null }
@@ -23,32 +23,63 @@ function extractMediaInfo(msg: Record<string, unknown>): MediaInfo {
   const ext = message.extendedTextMessage as Record<string, unknown> | undefined
   if (ext?.text) return { body: ext.text as string, mediaType: null, mediaUrl: null }
 
+  // send.message coloca mediaUrl dentro de message; messages.upsert coloca no topo
+  const mediaUrl = s3Url ?? (message.mediaUrl as string | undefined) ?? null
+
   type M = { url?: string; mimetype?: string; caption?: string; fileName?: string }
 
   if (message.imageMessage) {
     const m = message.imageMessage as M
-    return { body: m.caption || '[Imagem]', mediaType: m.mimetype ?? 'image/jpeg', mediaUrl: s3Url }
+    return { body: m.caption || '[Imagem]', mediaType: m.mimetype ?? 'image/jpeg', mediaUrl }
   }
   if (message.videoMessage) {
     const m = message.videoMessage as M
-    return { body: m.caption || '[Vídeo]', mediaType: m.mimetype ?? 'video/mp4', mediaUrl: s3Url }
+    return { body: m.caption || '[Vídeo]', mediaType: m.mimetype ?? 'video/mp4', mediaUrl }
   }
   if (message.audioMessage || message.pttMessage) {
     const m = ((message.audioMessage ?? message.pttMessage) as M | undefined) ?? {}
-    return { body: '[Áudio]', mediaType: m.mimetype ?? 'audio/ogg', mediaUrl: s3Url }
+    return { body: '[Áudio]', mediaType: m.mimetype ?? 'audio/ogg', mediaUrl }
   }
   if (message.documentMessage) {
     const m = message.documentMessage as M
     return {
       body: m.fileName ? `[Documento: ${m.fileName}]` : '[Documento]',
       mediaType: m.mimetype ?? 'application/octet-stream',
-      mediaUrl: s3Url,
+      mediaUrl,
     }
   }
   if (message.stickerMessage) {
     const m = message.stickerMessage as M
-    return { body: '[Sticker]', mediaType: m.mimetype ?? 'image/webp', mediaUrl: s3Url }
+    return { body: '[Sticker]', mediaType: m.mimetype ?? 'image/webp', mediaUrl }
   }
+
+  // Wrappers: tipos que encapsulam outro tipo de mensagem internamente
+  // Ex: viewOnceMessage { message: { imageMessage: {...} } }
+  const wrapperKeys = [
+    'viewOnceMessage', 'viewOnceMessageV2', 'viewOnceMessageV2Extension',
+    'documentWithCaptionMessage', 'ephemeralMessage',
+  ]
+  for (const key of wrapperKeys) {
+    if (message[key]) {
+      const inner = (message[key] as Record<string, unknown>).message as Record<string, unknown> | undefined
+      if (inner) return extractMediaInfo({ ...msg, message: inner })
+    }
+  }
+
+  // Tipos sem mídia — label legível
+  if (message.locationMessage)
+    return { body: '[Localização]', mediaType: null, mediaUrl: null }
+  if (message.liveLocationMessage)
+    return { body: '[Localização em tempo real]', mediaType: null, mediaUrl: null }
+  if (message.contactMessage || message.contactsArrayMessage)
+    return { body: '[Contato]', mediaType: null, mediaUrl: null }
+  if (message.pollCreationMessage)
+    return { body: '[Enquete]', mediaType: null, mediaUrl: null }
+  if (message.reactionMessage) {
+    const emoji = ((message.reactionMessage as Record<string, unknown>).text as string | undefined)?.trim()
+    return { body: emoji ? `[Reação: ${emoji}]` : '[Reação]', mediaType: null, mediaUrl: null }
+  }
+
   return { body: '[mídia]', mediaType: null, mediaUrl: null }
 }
 
@@ -81,8 +112,10 @@ export async function POST(req: NextRequest) {
   }
   console.log('[webhook] event:', event, '| inbox:', inbox.name, '| instance:', instanceName)
 
-  // ─── messages.upsert ──────────────────────────────────────────────────────
-  if (event === 'messages.upsert') {
+  // ─── messages.upsert + send.message ──────────────────────────────────────
+  // send.message dispara quando Chatwoot (ou outro cliente) envia via Evolution API.
+  // O payload é idêntico ao messages.upsert, sempre com fromMe: true.
+  if (event === 'messages.upsert' || event === 'send.message') {
     const data = payload.data as Record<string, unknown>
     if (!data) return NextResponse.json({ ok: true })
 
@@ -196,8 +229,14 @@ export async function POST(req: NextRequest) {
 
       if (!conv) continue
 
+      // Remove base64 do metadata antes de salvar — send.message inclui o áudio/mídia
+      // completo em base64 (~1 MB por mensagem), desnecessário pois temos a URL do MinIO.
+      const msgForMetadata = msg.message && (msg.message as Record<string, unknown>).base64
+        ? { ...msg, message: { ...(msg.message as Record<string, unknown>), base64: undefined } }
+        : msg
+
       // Inserir mensagem (ignorar duplicatas por wa_message_id)
-      await supabase
+      const { error: msgError } = await supabase
         .from('crm_messages')
         .upsert(
           {
@@ -210,10 +249,11 @@ export async function POST(req: NextRequest) {
             media_url: mediaUrl,
             sender_name: fromMe ? null : (pushName ?? null),
             status: 'delivered',
-            metadata: msg as import('@/lib/supabase/types').Json,
+            metadata: msgForMetadata as import('@/lib/supabase/types').Json,
           },
           { onConflict: 'wa_message_id', ignoreDuplicates: true }
         )
+      if (msgError) console.error('[webhook] falha ao salvar mensagem:', msgError.message, '| convId:', conv.id, '| waId:', waMessageId)
 
       // Notifica clientes SSE conectados
       emitInboxEvent({ inboxId: inbox.id, conversationId: conv.id })
