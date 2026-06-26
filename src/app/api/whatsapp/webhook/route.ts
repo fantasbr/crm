@@ -117,7 +117,10 @@ export async function POST(req: NextRequest) {
   // O payload é idêntico ao messages.upsert, sempre com fromMe: true.
   if (event === 'messages.upsert' || event === 'send.message') {
     const data = payload.data as Record<string, unknown>
-    if (!data) return NextResponse.json({ ok: true })
+    if (!data) {
+      console.warn('[webhook] evento sem data | event:', event)
+      return NextResponse.json({ ok: true })
+    }
 
     const messages = Array.isArray(data) ? data : [data]
 
@@ -132,7 +135,10 @@ export async function POST(req: NextRequest) {
       const waMessageId = key.id as string
       const pushName = msg.pushName as string | undefined
       const message = msg.message as Record<string, unknown> | undefined
-      if (!message) continue
+      if (!message) {
+        console.warn('[webhook] mensagem sem campo message ignorada | event:', event, '| waId:', waMessageId, '| fromMe:', fromMe, '| jid:', remoteJid)
+        continue
+      }
 
       const { body, mediaType, mediaUrl } = extractMediaInfo(msg)
       const waPhone = normalizePhone(remoteJid)
