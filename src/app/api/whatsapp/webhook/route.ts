@@ -135,6 +135,24 @@ export async function POST(req: NextRequest) {
       if (!message) continue
 
       const { body, mediaType, mediaUrl } = extractMediaInfo(msg)
+
+      // DEBUG temporário: ver onde a URL de mídia está no payload
+      if (mediaType) {
+        const msgObj = msg.message as Record<string, unknown> | undefined
+        const keys = msgObj ? Object.keys(msgObj).filter(k => k !== 'base64') : []
+        console.log('[webhook][media-debug]', JSON.stringify({
+          event,
+          mediaType,
+          resolved_mediaUrl: mediaUrl,
+          'msg.mediaUrl': msg.mediaUrl,
+          'msg.s3': msg.s3,
+          'msg.url': msg.url,
+          'msg.media': msg.media,
+          'message.mediaUrl': msgObj?.mediaUrl,
+          'message.keys': keys,
+        }))
+      }
+
       const waPhone = normalizePhone(remoteJid)
 
       // Encontrar ou criar contato
