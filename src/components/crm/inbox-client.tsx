@@ -4,9 +4,56 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { NewDealModal } from '@/components/crm/new-deal-modal'
 import { EditContactModal } from '@/components/crm/edit-contact-modal'
+import { DealDetailModal } from '@/components/crm/deal-detail-modal'
+import type { Deal, Contact, User } from '@/types/crm'
 import { cn } from '@/lib/utils'
 import { Send, Plus, Phone, CheckCheck, Clock, Search, Paperclip, FileText, X, Mic, Square, CheckCircle, RotateCcw, Pencil } from 'lucide-react'
 import type { Database } from '@/lib/supabase/types'
+
+function dbDealToDeal(row: Record<string, unknown>): Deal {
+  const contact = row.crm_contacts as Record<string, string>
+  const user = row.assigned_user as Record<string, string> | null
+  const svc = row.crm_services as Record<string, unknown> | null
+  const plan = row.crm_service_plans as Record<string, unknown> | null
+  return {
+    id: row.id as string,
+    contactId: row.contact_id as string,
+    contact: {
+      id: contact.id,
+      name: contact.name,
+      phone: contact.phone,
+      email: contact.email ?? undefined,
+      origin: contact.origin as Contact['origin'],
+      createdAt: contact.created_at,
+    },
+    pipelineId: row.pipeline_id as string,
+    stageId: row.stage_id as string,
+    assignedTo: user
+      ? { id: user.id, name: user.name, email: '', role: user.role as User['role'] }
+      : { id: '', name: 'Sem responsável', email: '', role: 'seller' },
+    serviceId: row.service_id as string | null,
+    service: svc ? { id: svc.id as string, name: svc.name as string } : null,
+    chatwootConversationId: row.chatwoot_conversation_id as string | null,
+    waConversationId: row.wa_conversation_id as string | null,
+    planId: row.plan_id as string | null,
+    plan: plan ? {
+      id: plan.id as string,
+      name: plan.name as string,
+      tablePrice: plan.table_price as number | null,
+      maxDiscountPct: plan.max_discount_pct as number,
+    } : null,
+    urgency: row.urgency as Deal['urgency'],
+    temperature: row.temperature as Deal['temperature'],
+    interestPoint: row.interest_point as string | undefined,
+    objection: row.objection as string | undefined,
+    previousExperience: row.previous_experience as string | undefined,
+    paymentMethod: row.payment_method as Deal['paymentMethod'] | undefined,
+    negotiatedValue: row.negotiated_value as number | undefined,
+    status: row.status as Deal['status'],
+    createdAt: row.created_at as string,
+    updatedAt: row.updated_at as string,
+  }
+}
 
 type DbInbox = Database['public']['Tables']['crm_inboxes']['Row']
 type DbStage = Database['public']['Tables']['crm_stages']['Row']
@@ -62,6 +109,8 @@ export function InboxClient({
   const [statusFilter, setStatusFilter] = useState<'open' | 'resolved'>('open')
   const [newDealOpen, setNewDealOpen] = useState(false)
   const [editContactOpen, setEditContactOpen] = useState(false)
+  const [activeDeal, setActiveDeal] = useState<Deal | null>(null)
+  const [dealPanelOpen, setDealPanelOpen] = useState(false)
   const [mounted, setMounted] = useState(false)
   const [pendingFile, setPendingFile] = useState<{ base64: string; type: string; name: string; preview?: string } | null>(null)
   const [recording, setRecording] = useState(false)
@@ -168,6 +217,21 @@ export function InboxClient({
     params.delete('phone')
     history.replaceState(null, '', `/inbox?${params.toString()}`)
   }, [activeConvId, supabase, loadMessages])
+
+  // ─── Busca o deal ativo do contato da conversa selecionada ───────────────
+  useEffect(() => {
+    const contactId = activeConv?.crm_contacts?.id
+    if (!contactId) { setActiveDeal(null); return }
+    supabase
+      .from('crm_deals')
+      .select('*, crm_contacts(*), crm_services(id, name), crm_service_plans(id, name, table_price, max_discount_pct), assigned_user:crm_users!crm_deals_assigned_to_fkey(id, name, role)')
+      .eq('contact_id', contactId)
+      .eq('status', 'open')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+      .then(({ data }) => setActiveDeal(data ? dbDealToDeal(data as Record<string, unknown>) : null))
+  }, [activeConvId, supabase]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Scroll to bottom on new messages ────────────────────────────────────
   useEffect(() => {
@@ -549,13 +613,23 @@ export function InboxClient({
                     : <><RotateCcw className="w-3.5 h-3.5" />Reabrir</>
                   }
                 </button>
-                <button
-                  onClick={() => setNewDealOpen(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-500 text-white text-xs font-medium rounded-lg hover:bg-brand-600 transition-colors"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  Criar Deal
-                </button>
+                {activeDeal ? (
+                  <button
+                    onClick={() => setDealPanelOpen(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-50 text-brand-600 border border-brand-200 text-xs font-medium rounded-lg hover:bg-brand-100 transition-colors"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                    Ver Deal
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setNewDealOpen(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-500 text-white text-xs font-medium rounded-lg hover:bg-brand-600 transition-colors"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Criar Deal
+                  </button>
+                )}
               </div>
             </div>
 
@@ -781,6 +855,30 @@ export function InboxClient({
           prefilledContactId={activeConv?.crm_contacts?.id ?? undefined}
           prefilledConversationId={activeConvId ?? undefined}
           onCreated={() => setNewDealOpen(false)}
+        />
+      )}
+
+      {/* Deal side panel */}
+      {activeDeal && (
+        <DealDetailModal
+          deal={activeDeal}
+          open={dealPanelOpen}
+          onClose={() => setDealPanelOpen(false)}
+          onUpdated={() => {
+            // Rebusca o deal para refletir edições (temperatura, valor, etc.)
+            const contactId = activeConv?.crm_contacts?.id
+            if (!contactId) return
+            supabase
+              .from('crm_deals')
+              .select('*, crm_contacts(*), crm_services(id, name), crm_service_plans(id, name, table_price, max_discount_pct), assigned_user:crm_users!crm_deals_assigned_to_fkey(id, name, role)')
+              .eq('contact_id', contactId)
+              .eq('status', 'open')
+              .order('created_at', { ascending: false })
+              .limit(1)
+              .maybeSingle()
+              .then(({ data }) => setActiveDeal(data ? dbDealToDeal(data as Record<string, unknown>) : null))
+          }}
+          variant="panel"
         />
       )}
 
