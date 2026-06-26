@@ -136,18 +136,19 @@ export async function POST(req: NextRequest) {
 
       const { body, mediaType, mediaUrl } = extractMediaInfo(msg)
 
-      // DEBUG temporário: ver onde a URL de mídia está no payload
-      if (mediaType) {
+      // DEBUG temporário: inspecionar estrutura do payload para toda mensagem
+      {
         const msgObj = msg.message as Record<string, unknown> | undefined
         const keys = msgObj ? Object.keys(msgObj).filter(k => k !== 'base64') : []
-        console.log('[webhook][media-debug]', JSON.stringify({
+        const topKeys = Object.keys(msg).filter(k => k !== 'message')
+        console.log('[webhook][msg-debug]', JSON.stringify({
           event,
+          fromMe,
+          body: body.slice(0, 40),
           mediaType,
           resolved_mediaUrl: mediaUrl,
           'msg.mediaUrl': msg.mediaUrl,
-          'msg.s3': msg.s3,
-          'msg.url': msg.url,
-          'msg.media': msg.media,
+          'msg.topKeys': topKeys,
           'message.mediaUrl': msgObj?.mediaUrl,
           'message.keys': keys,
         }))
