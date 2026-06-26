@@ -143,8 +143,9 @@ export function InboxClient({
     setLoadingMsgs(true)
     loadMessages(activeConvId).finally(() => setLoadingMsgs(false))
 
-    // Mark as read
+    // Mark as read — atualiza local imediatamente (badge some na hora)
     supabase.from('crm_conversations').update({ unread_count: 0 }).eq('id', activeConvId)
+    setConversations(prev => prev.map(c => c.id === activeConvId ? { ...c, unread_count: 0 } : c))
 
     // Atualiza a URL sem acionar re-fetch do RSC (router.replace com force-dynamic
     // causa remontagem via Suspense e o efeito de deselect limpa activeConvId).

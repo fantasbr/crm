@@ -57,8 +57,14 @@ export function NewDealModal({ open, onClose, pipelineId, initialStageId, stages
   const set = (key: string, value: string | number) =>
     setForm(prev => ({ ...prev, [key]: value }))
 
+  // Sincroniza o contato pré-preenchido toda vez que o modal abre
+  // (o modal fica montado; useState não reinicializa quando a prop muda)
   useEffect(() => {
     if (!open) return
+    if (prefilledContactId) {
+      setContactMode('existing')
+      setForm(prev => ({ ...prev, contactId: prefilledContactId }))
+    }
     const supabase = createClient()
     supabase.from('crm_users').select('*').order('name').then(({ data }) => setUsers(data ?? []))
     supabase.from('crm_contacts').select('*').order('name').then(({ data }) => setContacts(data ?? []))
@@ -74,7 +80,7 @@ export function NewDealModal({ open, onClose, pipelineId, initialStageId, stages
           crm_service_plans: (s.crm_service_plans ?? []).filter(p => p.active).sort((a, b) => a.order - b.order),
         })))
       })
-  }, [open])
+  }, [open, prefilledContactId])
 
   useEffect(() => {
     if (initialStageId) set('stageId', initialStageId)
@@ -158,18 +164,22 @@ export function NewDealModal({ open, onClose, pipelineId, initialStageId, stages
         <form onSubmit={handleSubmit} className="space-y-5">
           {/* Contato */}
           <div>
-            <div className="flex gap-2 mb-3">
-              {(['existing', 'new'] as const).map(m => (
-                <button key={m} type="button" onClick={() => setContactMode(m)}
-                  className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${contactMode === m ? 'bg-brand-500 text-white border-brand-500' : 'border-gray-200 text-gray-600'}`}>
-                  {m === 'existing' ? 'Contato existente' : 'Novo contato'}
-                </button>
-              ))}
-            </div>
+            {/* Toggle só aparece quando não há contato pré-fixado da conversa */}
+            {!prefilledContactId && (
+              <div className="flex gap-2 mb-3">
+                {(['existing', 'new'] as const).map(m => (
+                  <button key={m} type="button" onClick={() => setContactMode(m)}
+                    className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${contactMode === m ? 'bg-brand-500 text-white border-brand-500' : 'border-gray-200 text-gray-600'}`}>
+                    {m === 'existing' ? 'Contato existente' : 'Novo contato'}
+                  </button>
+                ))}
+              </div>
+            )}
 
             {contactMode === 'existing' ? (
               <select required value={form.contactId} onChange={e => set('contactId', e.target.value)}
-                className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white">
+                disabled={!!prefilledContactId}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white disabled:bg-gray-50 disabled:text-gray-700 disabled:cursor-not-allowed">
                 <option value="">Selecionar contato...</option>
                 {contacts.map(c => <option key={c.id} value={c.id}>{c.name} — {c.phone}</option>)}
               </select>
