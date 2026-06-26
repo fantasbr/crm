@@ -121,6 +121,19 @@ export async function POST(req: NextRequest) {
 
     const messages = Array.isArray(data) ? data : [data]
 
+    // DEBUG: log estrutura bruta antes de qualquer filtragem
+    console.log('[webhook][data-debug]', JSON.stringify({
+      isArray: Array.isArray(data),
+      msgCount: messages.length,
+      firstMsgTopKeys: messages[0] ? Object.keys(messages[0] as object).filter(k => !['base64','message'].includes(k)) : [],
+      firstMsgHasMessage: messages[0] ? 'message' in (messages[0] as object) : false,
+      firstMsgMessageType: messages[0] ? typeof (messages[0] as Record<string,unknown>).message : 'n/a',
+      firstMsgMessageKeys: (() => {
+        const m = messages[0] ? (messages[0] as Record<string,unknown>).message : undefined
+        return m && typeof m === 'object' ? Object.keys(m as object).filter(k => k !== 'base64') : []
+      })(),
+    }))
+
     for (const msg of messages) {
       const key = msg.key as Record<string, unknown>
       if (!key) continue
