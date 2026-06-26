@@ -22,26 +22,27 @@ export async function GET(req: NextRequest) {
   if (!msgAuth) return new Response('Not found', { status: 404 })
 
   // Caminho rápido: MinIO URL já disponível — proxy direto, sem chamar a Evolution API
+  // Se falhar (URL pre-signed expirada após 7 dias), cai no fallback da Evolution API
   if (msgAuth.media_url) {
-    let minioRes: Response
+    let minioRes: Response | null = null
     try {
       minioRes = await fetch(msgAuth.media_url)
     } catch (err) {
-      console.error('[media] falha ao buscar do MinIO:', err)
-      return new Response('Erro ao buscar mídia', { status: 502 })
+      console.warn('[media] falha ao buscar do MinIO, tentando fallback:', err)
     }
-    if (!minioRes.ok) {
-      console.error('[media] MinIO retornou', minioRes.status, msgAuth.media_url)
-      return new Response('Mídia não encontrada no storage', { status: 502 })
+    if (minioRes?.ok) {
+      const mimetype = msgAuth.media_type ?? minioRes.headers.get('Content-Type') ?? 'application/octet-stream'
+      return new Response(minioRes.body, {
+        headers: {
+          'Content-Type': mimetype,
+          'Cache-Control': 'private, max-age=86400',
+          'Content-Length': minioRes.headers.get('Content-Length') ?? '',
+        },
+      })
     }
-    const mimetype = msgAuth.media_type ?? minioRes.headers.get('Content-Type') ?? 'application/octet-stream'
-    return new Response(minioRes.body, {
-      headers: {
-        'Content-Type': mimetype,
-        'Cache-Control': 'private, max-age=86400',
-        'Content-Length': minioRes.headers.get('Content-Length') ?? '',
-      },
-    })
+    if (minioRes) {
+      console.warn('[media] MinIO retornou', minioRes.status, '— tentando Evolution API fallback')
+    }
   }
 
   // Fallback: sem URL no banco — busca base64 via Evolution API (mensagens antigas)
