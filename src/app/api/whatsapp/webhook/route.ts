@@ -142,11 +142,35 @@ export async function POST(req: NextRequest) {
       const contactName = !fromMe ? (pushName ?? waPhone) : waPhone
 
       let contactId: string | null = null
-      const { data: existingContact } = await supabase
+      let existingContact: { id: string; name: string } | null = null
+
+      // 1. Busca por wa_phone (contato já vinculado ao WhatsApp)
+      const { data: byWaPhone } = await supabase
         .from('crm_contacts')
         .select('id, name')
         .eq('wa_phone', waPhone)
         .maybeSingle()
+
+      if (byWaPhone) {
+        existingContact = byWaPhone
+      } else {
+        // 2. Fallback: contato cadastrado manualmente com mesmo phone mas sem wa_phone
+        const { data: byPhone } = await supabase
+          .from('crm_contacts')
+          .select('id, name')
+          .eq('phone', waPhone)
+          .is('wa_phone', null)
+          .maybeSingle()
+        if (byPhone) {
+          existingContact = byPhone
+          // Vincula o WhatsApp ao contato existente
+          await supabase
+            .from('crm_contacts')
+            .update({ wa_phone: waPhone })
+            .eq('id', byPhone.id)
+        }
+      }
+
       if (existingContact) {
         contactId = existingContact.id
         // Corrige nome placeholder (= telefone) se agora temos o nome real via inbound
