@@ -106,7 +106,14 @@ export function InboxClient({
       .eq('status', statusFilterRef.current)
       .order('last_message_at', { ascending: false })
       .limit(50)
-    setConversations((data ?? []) as DbConversation[])
+    // Preserva o zero local da conversa ativa para evitar race condition com SSE:
+    // o SSE dispara loadConversations antes do mark-as-read persistir no banco.
+    const activeId = activeConvIdRef.current
+    setConversations(
+      ((data ?? []) as DbConversation[]).map(c =>
+        c.id === activeId ? { ...c, unread_count: 0 } : c
+      )
+    )
   }, [supabase])
 
   // ─── Load messages for a conversation ─────────────────────────────────────
@@ -145,9 +152,14 @@ export function InboxClient({
     setLoadingMsgs(true)
     loadMessages(activeConvId).finally(() => setLoadingMsgs(false))
 
-    // Mark as read — atualiza local imediatamente (badge some na hora)
-    supabase.from('crm_conversations').update({ unread_count: 0 }).eq('id', activeConvId)
+    // Mark as read — atualiza local imediatamente; persiste via service client (bypassa RLS)
     setConversations(prev => prev.map(c => c.id === activeConvId ? { ...c, unread_count: 0 } : c))
+    fetch('/api/conversations/read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationId: activeConvId }),
+      keepalive: true,
+    }).catch(err => console.warn('[inbox] mark-as-read failed:', err))
 
     // Atualiza a URL sem acionar re-fetch do RSC (router.replace com force-dynamic
     // causa remontagem via Suspense e o efeito de deselect limpa activeConvId).
@@ -179,9 +191,14 @@ export function InboxClient({
       const currentConvId = activeConvIdRef.current
       if (currentConvId) {
         loadMessages(currentConvId)
-        // Marca como lida apenas se o evento é especificamente para esta conversa
+        // Marca como lida se o evento é para esta conversa (loadConversations já zerará o count localmente)
         if (ev.conversationId === currentConvId) {
-          supabase.from('crm_conversations').update({ unread_count: 0 }).eq('id', currentConvId)
+          fetch('/api/conversations/read', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ conversationId: currentConvId }),
+            keepalive: true,
+          }).catch(() => {})
         }
       }
     }
