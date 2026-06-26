@@ -54,7 +54,8 @@ export async function GET(req: NextRequest) {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache, no-transform',
       'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no',
+      'X-Accel-Buffering': 'no',      // Nginx/Traefik: desabilita buffering
+      'Content-Encoding': 'identity',  // Impede gzip middleware de bufferizar o stream
     },
   })
 }

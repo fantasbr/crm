@@ -179,6 +179,12 @@ export function InboxClient({
     if (!activeInboxId) return
     const es = new EventSource(`/api/whatsapp/stream?inboxId=${activeInboxId}`)
 
+    // Reconexão automática: recarrega a lista para recuperar eventos perdidos
+    // durante a desconexão (SSE não faz replay; onopen dispara a cada reconect).
+    es.onopen = () => {
+      loadConversations(activeInboxId)
+    }
+
     es.onmessage = (e) => {
       let ev: { inboxId: string; conversationId: string }
       try { ev = JSON.parse(e.data) } catch { return }
@@ -203,9 +209,12 @@ export function InboxClient({
       }
     }
 
-    // EventSource reconecta sozinho em caso de queda
-    return () => es.close()
-  }, [activeInboxId, supabase, loadConversations, loadMessages])
+    // Polling de segurança: garante atualização mesmo se o SSE perder eventos.
+    // Intervalo longo para não sobrecarregar — SSE é o caminho principal.
+    const poll = setInterval(() => loadConversations(activeInboxId), 30_000)
+
+    return () => { es.close(); clearInterval(poll) }
+  }, [activeInboxId, loadConversations, loadMessages])
 
   // ─── File picker ──────────────────────────────────────────────────────────
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
