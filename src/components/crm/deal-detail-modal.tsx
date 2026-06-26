@@ -15,6 +15,12 @@ type Activity = Database['public']['Tables']['crm_deal_activities']['Row'] & {
 }
 
 type Stage = Database['public']['Tables']['crm_stages']['Row']
+type DbService = Database['public']['Tables']['crm_services']['Row']
+type DbPlan = Database['public']['Tables']['crm_service_plans']['Row']
+
+interface ServiceWithPlans extends DbService {
+  crm_service_plans: DbPlan[]
+}
 
 const activityIcon = (type: string) => {
   switch (type) {
@@ -42,6 +48,7 @@ export function DealDetailModal({ deal, open, onClose, onUpdated, onBudget, vari
   const [stages, setStages] = useState<Stage[]>([])
   const [saving, setSaving] = useState(false)
   const [closingDeal, setClosingDeal] = useState<'won' | 'lost' | null>(null)
+  const [services, setServices] = useState<ServiceWithPlans[]>([])
 
   const [editForm, setEditForm] = useState({
     temperature: deal.temperature,
@@ -50,6 +57,8 @@ export function DealDetailModal({ deal, open, onClose, onUpdated, onBudget, vari
     objection: deal.objection ?? '',
     interest_point: deal.interestPoint ?? '',
     previous_experience: deal.previousExperience ?? '',
+    service_id: deal.serviceId ?? '',
+    plan_id: deal.planId ?? '',
   })
 
   useEffect(() => {
@@ -67,6 +76,13 @@ export function DealDetailModal({ deal, open, onClose, onUpdated, onBudget, vari
       .eq('pipeline_id', deal.pipelineId)
       .order('order')
       .then(({ data }) => setStages(data ?? []))
+
+    supabase.from('crm_services')
+      .select('*, crm_service_plans(*)')
+      .eq('active', true)
+      .order('name')
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .then(({ data }) => setServices((data ?? []) as any as ServiceWithPlans[]))
   }, [open, deal.id, deal.pipelineId])
 
   const handleSaveEdit = async () => {
@@ -79,6 +95,8 @@ export function DealDetailModal({ deal, open, onClose, onUpdated, onBudget, vari
       objection: editForm.objection || null,
       interest_point: editForm.interest_point || null,
       previous_experience: editForm.previous_experience || null,
+      service_id: editForm.service_id || null,
+      plan_id: editForm.plan_id || null,
     }).eq('id', deal.id)
     setSaving(false)
     setEditing(false)
@@ -227,23 +245,72 @@ export function DealDetailModal({ deal, open, onClose, onUpdated, onBudget, vari
             </div>
 
             <div className="grid grid-cols-2 gap-4">
-              <div>
+              <div className={editing ? 'col-span-2' : ''}>
                 <p className="text-xs text-gray-400 mb-1">Serviço</p>
-                <p className="text-sm font-medium text-gray-900">{deal.service?.name ?? '—'}</p>
-                {deal.plan ? (
-                  <div className="mt-1">
-                    <span className="inline-flex items-center text-xs bg-brand-50 text-brand-700 border border-brand-200 rounded-full px-2 py-0.5 font-medium">
-                      {deal.plan.name}
-                    </span>
-                    {deal.plan.tablePrice != null && (
-                      <p className="text-xs text-gray-400 mt-0.5">
-                        Tabela: {deal.plan.tablePrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                        {deal.plan.maxDiscountPct > 0 && <span className="ml-1">· Margem: {deal.plan.maxDiscountPct}%</span>}
-                      </p>
-                    )}
+                {editing ? (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-2">
+                      {services.map(svc => (
+                        <button key={svc.id} type="button"
+                          onClick={() => setEditForm(p => ({ ...p, service_id: svc.id, plan_id: '' }))}
+                          className={cn(
+                            'px-3 py-2 rounded-lg border text-sm font-medium text-left transition-colors',
+                            editForm.service_id === svc.id
+                              ? 'bg-brand-500 text-white border-brand-500'
+                              : 'bg-white text-gray-700 border-gray-200 hover:border-brand-300 hover:bg-brand-50'
+                          )}>
+                          {svc.name}
+                        </button>
+                      ))}
+                    </div>
+                    {editForm.service_id && (() => {
+                      const selectedSvc = services.find(s => s.id === editForm.service_id)
+                      const plans = selectedSvc?.crm_service_plans ?? []
+                      if (!plans.length) return null
+                      return (
+                        <div className="space-y-1.5">
+                          <p className="text-xs text-gray-400">Plano</p>
+                          {plans.map(plan => (
+                            <button key={plan.id} type="button"
+                              onClick={() => setEditForm(p => ({ ...p, plan_id: plan.id }))}
+                              className={cn(
+                                'w-full flex items-center justify-between px-3 py-2 rounded-lg border text-sm transition-colors',
+                                editForm.plan_id === plan.id
+                                  ? 'bg-brand-50 border-brand-400 text-brand-800'
+                                  : 'bg-white border-gray-200 text-gray-700 hover:border-brand-300'
+                              )}>
+                              <span className="font-medium">{plan.name}</span>
+                              {plan.table_price != null && (
+                                <span className="text-xs text-gray-400">
+                                  {plan.table_price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                  {plan.max_discount_pct > 0 && ` · -${plan.max_discount_pct}%`}
+                                </span>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      )
+                    })()}
                   </div>
                 ) : (
-                  <p className="text-xs text-gray-400 mt-0.5">Nenhum plano selecionado</p>
+                  <>
+                    <p className="text-sm font-medium text-gray-900">{deal.service?.name ?? '—'}</p>
+                    {deal.plan ? (
+                      <div className="mt-1">
+                        <span className="inline-flex items-center text-xs bg-brand-50 text-brand-700 border border-brand-200 rounded-full px-2 py-0.5 font-medium">
+                          {deal.plan.name}
+                        </span>
+                        {deal.plan.tablePrice != null && (
+                          <p className="text-xs text-gray-400 mt-0.5">
+                            Tabela: {deal.plan.tablePrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                            {deal.plan.maxDiscountPct > 0 && <span className="ml-1">· Margem: {deal.plan.maxDiscountPct}%</span>}
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-gray-400 mt-0.5">Nenhum plano selecionado</p>
+                    )}
+                  </>
                 )}
               </div>
               <div>
