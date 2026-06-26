@@ -3,15 +3,16 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { NewDealModal } from '@/components/crm/new-deal-modal'
+import { EditContactModal } from '@/components/crm/edit-contact-modal'
 import { cn } from '@/lib/utils'
-import { Send, Plus, Phone, CheckCheck, Clock, Search, Paperclip, FileText, X, Mic, Square, CheckCircle, RotateCcw } from 'lucide-react'
+import { Send, Plus, Phone, CheckCheck, Clock, Search, Paperclip, FileText, X, Mic, Square, CheckCircle, RotateCcw, Pencil } from 'lucide-react'
 import type { Database } from '@/lib/supabase/types'
 
 type DbInbox = Database['public']['Tables']['crm_inboxes']['Row']
 type DbStage = Database['public']['Tables']['crm_stages']['Row']
 
 type DbConversation = Database['public']['Tables']['crm_conversations']['Row'] & {
-  crm_contacts: { id: string; name: string; phone: string } | null
+  crm_contacts: { id: string; name: string; phone: string; email: string | null; origin: string } | null
 }
 type DbMessage = Database['public']['Tables']['crm_messages']['Row']
 
@@ -60,6 +61,7 @@ export function InboxClient({
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'open' | 'resolved'>('open')
   const [newDealOpen, setNewDealOpen] = useState(false)
+  const [editContactOpen, setEditContactOpen] = useState(false)
   const [mounted, setMounted] = useState(false)
   const [pendingFile, setPendingFile] = useState<{ base64: string; type: string; name: string; preview?: string } | null>(null)
   const [recording, setRecording] = useState(false)
@@ -99,7 +101,7 @@ export function InboxClient({
   const loadConversations = useCallback(async (inboxId: string) => {
     const { data } = await supabase
       .from('crm_conversations')
-      .select('*, crm_contacts(id, name, phone)')
+      .select('*, crm_contacts(id, name, phone, email, origin)')
       .eq('inbox_id', inboxId)
       .eq('status', statusFilterRef.current)
       .order('last_message_at', { ascending: false })
@@ -478,9 +480,20 @@ export function InboxClient({
                   </span>
                 </div>
                 <div>
-                  <p className="text-sm font-semibold text-gray-900">
-                    {activeConv.crm_contacts?.name ?? activeConv.wa_jid.split('@')[0]}
-                  </p>
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-sm font-semibold text-gray-900">
+                      {activeConv.crm_contacts?.name ?? activeConv.wa_jid.split('@')[0]}
+                    </p>
+                    {activeConv.crm_contacts && (
+                      <button
+                        onClick={() => setEditContactOpen(true)}
+                        className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
+                        title="Editar contato"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                   {activeConv.crm_contacts?.phone && (
                     <p className="text-xs text-gray-500">{activeConv.crm_contacts.phone}</p>
                   )}
@@ -744,6 +757,20 @@ export function InboxClient({
           onCreated={() => setNewDealOpen(false)}
         />
       )}
+
+      {/* Edit Contact Modal */}
+      <EditContactModal
+        contact={editContactOpen && activeConv?.crm_contacts ? activeConv.crm_contacts : null}
+        onClose={() => setEditContactOpen(false)}
+        onSaved={(updated) => {
+          setConversations(prev => prev.map(c =>
+            c.crm_contacts?.id === updated.id
+              ? { ...c, crm_contacts: { ...c.crm_contacts!, name: updated.name } }
+              : c
+          ))
+          setEditContactOpen(false)
+        }}
+      />
     </div>
   )
 }
