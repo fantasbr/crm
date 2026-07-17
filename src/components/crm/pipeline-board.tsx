@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback } from 'react'
-import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, useSensor, useSensors, closestCorners } from '@dnd-kit/core'
+import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, PointerSensor, useSensor, useSensors, closestCorners, useDroppable } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
@@ -30,6 +30,18 @@ function SortableDealCard({ deal }: { deal: Deal }) {
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
       <DealCard deal={deal} />
+    </div>
+  )
+}
+
+// Registra a coluna inteira (inclusive a área vazia abaixo do último card) como
+// alvo de drop — sem isso, só os próprios cards (via useSortable) eram droppable,
+// então soltar numa coluna vazia ou no espaço abaixo do último card não movia nada.
+function DroppableColumnBody({ stageId, children }: { stageId: string; children: React.ReactNode }) {
+  const { setNodeRef } = useDroppable({ id: stageId })
+  return (
+    <div ref={setNodeRef} className="flex-1 space-y-2.5 overflow-y-auto pr-1 min-h-[80px]">
+      {children}
     </div>
   )
 }
@@ -175,7 +187,7 @@ export function PipelineBoard({ columns: initialColumns, onNewDeal }: PipelineBo
                 items={deals.map(d => d.id)}
                 strategy={verticalListSortingStrategy}
               >
-                <div className="flex-1 space-y-2.5 overflow-y-auto pr-1 min-h-[80px]">
+                <DroppableColumnBody stageId={stage.id}>
                   {deals.map(deal => (
                     <SortableDealCard key={deal.id} deal={deal} />
                   ))}
@@ -184,7 +196,7 @@ export function PipelineBoard({ columns: initialColumns, onNewDeal }: PipelineBo
                       <p className="text-xs text-gray-400">Arraste um deal aqui</p>
                     </div>
                   )}
-                </div>
+                </DroppableColumnBody>
               </SortableContext>
 
               <button

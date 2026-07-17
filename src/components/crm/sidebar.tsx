@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import {
-  LayoutDashboard, Users, Kanban, UsersRound,
+  LayoutDashboard, Users, Kanban,
   Settings, LogOut, ChevronRight, MessageCircle
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -14,7 +14,6 @@ const navItems = [
   { href: '/pipeline',  label: 'Pipeline',       icon: Kanban },
   { href: '/inbox',     label: 'Inbox',           icon: MessageCircle },
   { href: '/contacts',  label: 'Contatos',       icon: Users },
-  { href: '/teams',     label: 'Equipes',         icon: UsersRound },
   { href: '/settings',  label: 'Configurações',   icon: Settings },
 ]
 

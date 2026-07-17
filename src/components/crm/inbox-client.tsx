@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, Fragment } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { NewDealModal } from '@/components/crm/new-deal-modal'
 import { EditContactModal } from '@/components/crm/edit-contact-modal'
@@ -86,6 +86,22 @@ function formatMsgTime(iso: string) {
   return new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
 }
 
+function formatDateSeparator(iso: string) {
+  const d = new Date(iso)
+  const now = new Date()
+  const yesterday = new Date(now)
+  yesterday.setDate(now.getDate() - 1)
+  if (d.toDateString() === now.toDateString()) return 'Hoje'
+  if (d.toDateString() === yesterday.toDateString()) return 'Ontem'
+  return d.toLocaleDateString('pt-BR', {
+    day: '2-digit',
+    month: 'long',
+    year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
+  })
+}
+
+const MESSAGES_PAGE_SIZE = 100
+
 export function InboxClient({
   inboxes,
   initialConversations,
@@ -105,6 +121,8 @@ export function InboxClient({
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
   const [loadingMsgs, setLoadingMsgs] = useState(false)
+  const [hasMoreOlder, setHasMoreOlder] = useState(true)
+  const [loadingOlder, setLoadingOlder] = useState(false)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'open' | 'resolved'>('open')
   const [newDealOpen, setNewDealOpen] = useState(false)
@@ -116,6 +134,19 @@ export function InboxClient({
   const [recording, setRecording] = useState(false)
   const [recordSeconds, setRecordSeconds] = useState(0)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const messagesContainerRef = useRef<HTMLDivElement>(null)
+  // Effects sempre disparam uma vez no mount, mesmo sem mudança "real" de
+  // activeInboxId/statusFilter — sem essa guarda, o efeito de deseleção abaixo
+  // zerava a conversa vinda da URL (?conv=, ex: botão "Ver no Inbox" do Deal)
+  // um instante depois dela ser aberta.
+  const skipNextDeselectRef = useRef(true)
+  const suppressAutoScrollRef = useRef(false)
+  const scrollRestoreRef = useRef<number | null>(null)
+  // Enquanto o usuário está no fim da conversa (ou acabou de abri-la), o scroll
+  // acompanha novas mensagens e mídia que carrega tardiamente (imagem/vídeo).
+  // Deixa de acompanhar assim que o usuário rola para cima manualmente.
+  const pinnedToBottomRef = useRef(true)
+  const justOpenedRef = useRef(true)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
@@ -166,18 +197,76 @@ export function InboxClient({
   }, [supabase])
 
   // ─── Load messages for a conversation ─────────────────────────────────────
+  // Busca as MAIS RECENTES (desc + limit) e reverte para ordem cronológica —
+  // buscar com `ascending: true` + limit trazia as mais antigas e as mensagens
+  // recentes nunca apareciam em conversas com mais de 100 mensagens.
   const loadMessages = useCallback(async (convId: string) => {
     const { data } = await supabase
       .from('crm_messages')
       .select('*')
       .eq('conversation_id', convId)
-      .order('created_at', { ascending: true })
-      .limit(100)
-    setMessages(data ?? [])
+      .order('created_at', { ascending: false })
+      .limit(MESSAGES_PAGE_SIZE)
+    const recent = (data ?? []).slice().reverse()
+    setMessages(recent)
+    setHasMoreOlder(recent.length === MESSAGES_PAGE_SIZE)
   }, [supabase])
+
+  // Refresh usado por SSE/pós-envio: só a janela recente é refeita (pega status
+  // como "lida"/"entregue" atualizados); mensagens antigas já paginadas via
+  // loadOlderMessages são preservadas em vez de descartadas a cada evento.
+  const refreshMessages = useCallback(async (convId: string) => {
+    const { data } = await supabase
+      .from('crm_messages')
+      .select('*')
+      .eq('conversation_id', convId)
+      .order('created_at', { ascending: false })
+      .limit(MESSAGES_PAGE_SIZE)
+    const recent = (data ?? []).slice().reverse()
+    if (recent.length === 0) return
+    const earliestRecentTime = recent[0].created_at
+    setMessages(prev => {
+      const olderKept = prev.filter(m => m.conversation_id === convId && m.created_at < earliestRecentTime)
+      return [...olderKept, ...recent]
+    })
+  }, [supabase])
+
+  // ─── Carrega mensagens mais antigas (scroll para o topo) ──────────────────
+  const loadOlderMessages = useCallback(async () => {
+    if (loadingOlder || !hasMoreOlder || !activeConvId || messages.length === 0) return
+    setLoadingOlder(true)
+    const earliest = messages[0]
+    const { data } = await supabase
+      .from('crm_messages')
+      .select('*')
+      .eq('conversation_id', activeConvId)
+      .lt('created_at', earliest.created_at)
+      .order('created_at', { ascending: false })
+      .limit(MESSAGES_PAGE_SIZE)
+    const older = (data ?? []).slice().reverse()
+    if (older.length < MESSAGES_PAGE_SIZE) setHasMoreOlder(false)
+    if (older.length > 0) {
+      const container = messagesContainerRef.current
+      scrollRestoreRef.current = container?.scrollHeight ?? null
+      suppressAutoScrollRef.current = true
+      setMessages(prev => [...older, ...prev])
+    }
+    setLoadingOlder(false)
+  }, [supabase, loadingOlder, hasMoreOlder, activeConvId, messages])
+
+  const handleMessagesScroll = () => {
+    const container = messagesContainerRef.current
+    if (!container) return
+    pinnedToBottomRef.current = container.scrollHeight - container.scrollTop - container.clientHeight < 100
+    if (container.scrollTop < 80) loadOlderMessages()
+  }
 
   // Deseleciona conversa quando o usuário muda de inbox ou filtro
   useEffect(() => {
+    if (skipNextDeselectRef.current) {
+      skipNextDeselectRef.current = false
+      return
+    }
     setActiveConvId(null)
   }, [activeInboxId, statusFilter])
 
@@ -195,10 +284,25 @@ export function InboxClient({
     }
   }, [initialPhone, conversations])
 
+  // Reage a mudanças de `?conv=` mesmo sem remount do componente — ex: clicar
+  // em "Ver no Inbox" a partir do painel de Deal aberto dentro do próprio
+  // Inbox só troca a query string (mesma rota), então `useState(initialConvId)`
+  // não reinicializa sozinho; sem isso, o botão não fazia nada visível.
+  const lastAppliedConvIdRef = useRef(initialConvId)
+  useEffect(() => {
+    if (initialConvId && initialConvId !== lastAppliedConvIdRef.current) {
+      lastAppliedConvIdRef.current = initialConvId
+      setActiveConvId(initialConvId)
+    }
+  }, [initialConvId])
+
   // ─── Load messages when conversation changes ──────────────────────────────
   useEffect(() => {
     if (!activeConvId) return
     setLoadingMsgs(true)
+    setHasMoreOlder(true)
+    justOpenedRef.current = true
+    pinnedToBottomRef.current = true
     loadMessages(activeConvId).finally(() => setLoadingMsgs(false))
 
     // Mark as read — atualiza local imediatamente; persiste via service client (bypassa RLS)
@@ -233,10 +337,48 @@ export function InboxClient({
       .then(({ data }) => setActiveDeal(data ? dbDealToDeal(data as Record<string, unknown>) : null))
   }, [activeConvId, supabase]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ─── Scroll to bottom on new messages ────────────────────────────────────
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  // ─── Restaura a posição de scroll após prepend de mensagens antigas ───────
+  // Roda antes do paint para não piscar: sem isso, o navegador prependeria
+  // conteúdo acima do viewport e o scroll "pularia" para o topo.
+  useLayoutEffect(() => {
+    if (scrollRestoreRef.current !== null) {
+      const container = messagesContainerRef.current
+      if (container) container.scrollTop = container.scrollHeight - scrollRestoreRef.current
+      scrollRestoreRef.current = null
+    }
   }, [messages])
+
+  // ─── Scroll to bottom on new messages ────────────────────────────────────
+  // Suprimido quando a mudança veio de loadOlderMessages (prepend), que já
+  // trata a posição de scroll acima. Só rola se o usuário estiver "grudado"
+  // no fim — ao abrir a conversa (justOpenedRef) sempre está, garantindo que
+  // ela sempre abra mostrando as mensagens mais recentes.
+  useEffect(() => {
+    if (suppressAutoScrollRef.current) {
+      suppressAutoScrollRef.current = false
+      return
+    }
+    if (!pinnedToBottomRef.current || messages.length === 0) return
+    messagesEndRef.current?.scrollIntoView({ behavior: justOpenedRef.current ? 'auto' : 'smooth' })
+    justOpenedRef.current = false
+  }, [messages])
+
+  // Reancora no fim sempre que a altura do conteúdo mudar (imagem/vídeo
+  // carregando, webfont trocando de fallback pro arquivo real, etc.) — cobre
+  // qualquer reflow tardio, não só os casos óbvios. Sem isso, um navegação
+  // "fria" (ex: F5 ou clique em "Ver no Inbox" vindo de outra página) podia
+  // calcular o scroll antes do layout final assentar e deixar a conversa
+  // "curta" do final de verdade.
+  const messagesContentRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = messagesContentRef.current
+    if (!el) return
+    const observer = new ResizeObserver(() => {
+      if (pinnedToBottomRef.current) messagesEndRef.current?.scrollIntoView({ behavior: 'auto' })
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
 
   // ─── Tempo real via SSE (backend do CRM, sem WebSocket do Supabase) ───────
   useEffect(() => {
@@ -260,7 +402,7 @@ export function InboxClient({
       // ev.conversationId === activeConvId (isso causava mensagens sumindo).
       const currentConvId = activeConvIdRef.current
       if (currentConvId) {
-        loadMessages(currentConvId)
+        refreshMessages(currentConvId)
         // Marca como lida se o evento é para esta conversa (loadConversations já zerará o count localmente)
         if (ev.conversationId === currentConvId) {
           fetch('/api/conversations/read', {
@@ -278,7 +420,7 @@ export function InboxClient({
     const poll = setInterval(() => loadConversations(activeInboxId), 30_000)
 
     return () => { es.close(); clearInterval(poll) }
-  }, [activeInboxId, loadConversations, loadMessages])
+  }, [activeInboxId, loadConversations, refreshMessages])
 
   // ─── File picker ──────────────────────────────────────────────────────────
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -397,7 +539,7 @@ export function InboxClient({
         }
         // Usa ref para pegar o convId atual (pode ter mudado durante o await)
         const convIdNow = activeConvIdRef2.current
-        if (convIdNow) loadMessages(convIdNow)
+        if (convIdNow) refreshMessages(convIdNow)
       }
     } catch (err) {
       setText(savedText)
@@ -634,11 +776,22 @@ export function InboxClient({
             </div>
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50">
+            <div
+              ref={messagesContainerRef}
+              onScroll={handleMessagesScroll}
+              className="flex-1 overflow-y-auto p-4 bg-gray-50"
+            >
               {loadingMsgs && (
                 <div className="text-center text-gray-400 text-sm py-4">Carregando...</div>
               )}
-              {messages.map(msg => {
+              {!loadingMsgs && loadingOlder && (
+                <div className="text-center text-gray-400 text-xs py-2">Carregando mensagens anteriores...</div>
+              )}
+              <div ref={messagesContentRef} className="space-y-3">
+              {messages.map((msg, idx) => {
+                const prevMsg = messages[idx - 1]
+                const showDateSeparator = !prevMsg ||
+                  new Date(prevMsg.created_at).toDateString() !== new Date(msg.created_at).toDateString()
                 const isOut = msg.direction === 'outbound'
                 const mt = msg.media_type
                 const hasMedia = !!mt
@@ -657,7 +810,15 @@ export function InboxClient({
                 const showBody = !canRenderMedia || (msg.body && !msg.body.startsWith('['))
 
                 return (
-                  <div key={msg.id} className={cn('flex', isOut ? 'justify-end' : 'justify-start')}>
+                  <Fragment key={msg.id}>
+                    {showDateSeparator && (
+                      <div className="flex justify-center py-1">
+                        <span className="px-3 py-1 bg-gray-200 text-gray-600 text-[11px] font-medium rounded-full">
+                          {mounted ? formatDateSeparator(msg.created_at) : ''}
+                        </span>
+                      </div>
+                    )}
+                    <div className={cn('flex', isOut ? 'justify-end' : 'justify-start')}>
                     <div
                       className={cn(
                         'max-w-xs xl:max-w-sm rounded-2xl text-sm shadow-sm overflow-hidden',
@@ -734,8 +895,10 @@ export function InboxClient({
                       </div>
                     </div>
                   </div>
+                  </Fragment>
                 )
               })}
+              </div>
               <div ref={messagesEndRef} />
             </div>
 

@@ -6,7 +6,6 @@ import { paymentLabels, temperatureEmoji, temperatureColors, originLabels, origi
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 import { Phone, Mail, Calendar, MessageSquare, ArrowRight, CheckCircle, XCircle, Pencil, Check, X, FileText, MessageCircle } from 'lucide-react'
-import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import type { Database } from '@/lib/supabase/types'
 
@@ -147,12 +146,16 @@ export function DealDetailModal({ deal, open, onClose, onUpdated, onBudget, vari
         {temperatureEmoji[deal.temperature]} {deal.temperature}
       </span>
       {deal.waConversationId && variant === 'modal' && (
-        <Link
+        // <a> nativa (não <Link>): força navegação completa para /inbox, igual
+        // a um F5. Com <Link>, a troca de ?conv= numa navegação client-side
+        // para a mesma rota não estava remontando o InboxClient de forma
+        // confiável, então a conversa não abria (só o F5 funcionava).
+        <a
           href={`/inbox?conv=${deal.waConversationId}`}
           className="flex items-center gap-1 whitespace-nowrap px-2.5 py-1 bg-green-600 text-white text-xs font-medium rounded-full hover:bg-green-700 transition-colors"
         >
           <MessageCircle className="w-3.5 h-3.5" /> Inbox
-        </Link>
+        </a>
       )}
       {deal.status === 'open' && (
         <>
@@ -203,15 +206,15 @@ export function DealDetailModal({ deal, open, onClose, onUpdated, onBudget, vari
               <Phone className="w-3.5 h-3.5 text-gray-400" />
               <a href={`tel:${deal.contact.phone}`} className="hover:text-brand-500">{deal.contact.phone}</a>
               {deal.waConversationId ? (
-                <Link href={`/inbox?conv=${deal.waConversationId}`}
+                <a href={`/inbox?conv=${deal.waConversationId}`}
                   className="ml-1 text-xs text-green-600 hover:text-green-700 font-medium">
                   ver no inbox
-                </Link>
+                </a>
               ) : (
-                <Link href={`/inbox?phone=${deal.contact.phone.replace(/\D/g, '')}`}
+                <a href={`/inbox?phone=${deal.contact.phone.replace(/\D/g, '')}`}
                   className="ml-1 text-xs text-green-600 hover:text-green-700 font-medium">
                   inbox
-                </Link>
+                </a>
               )}
             </div>
             {deal.contact.email && (
