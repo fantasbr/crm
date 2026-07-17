@@ -7,7 +7,7 @@ version: "3.8"
 
 services:
   crm_app:
-    image: angelomoreirafilho/crm:v1.2.10
+    image: angelomoreirafilho/crm:v1.2.11
 
     networks:
       - BrancaNet
