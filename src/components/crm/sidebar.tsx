@@ -1,10 +1,11 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import {
   LayoutDashboard, Users, Kanban,
-  Settings, LogOut, ChevronRight, MessageCircle
+  Settings, LogOut, ChevronRight, MessageCircle, Menu, X
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
@@ -26,6 +27,15 @@ interface SidebarProps {
 export function Sidebar({ userName, userEmail, userRole }: SidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
+  const [open, setOpen] = useState(false)
+
+  // Fecha o menu ao navegar (mobile) e trava o scroll do fundo enquanto aberto
+  useEffect(() => { setOpen(false) }, [pathname])
+  useEffect(() => {
+    if (!open) return
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = '' }
+  }, [open])
 
   const handleLogout = async () => {
     const supabase = createClient()
@@ -43,29 +53,68 @@ export function Sidebar({ userName, userEmail, userRole }: SidebarProps) {
   }
 
   return (
-    <aside className="w-56 xl:w-64 flex flex-col h-full flex-shrink-0" style={{ backgroundColor: '#181614' }}>
+    <>
+      {/* Botão de abrir menu (mobile) — some quando o menu já está aberto,
+          o fechar nesse caso fica no cabeçalho da própria sidebar */}
+      {!open && (
+        <button
+          onClick={() => setOpen(true)}
+          className="md:hidden fixed top-3 left-3 z-50 p-2 rounded-lg text-white shadow-lg"
+          style={{ backgroundColor: '#181614' }}
+          aria-label="Abrir menu"
+        >
+          <Menu className="w-5 h-5" />
+        </button>
+      )}
+
+      {/* Fundo escurecido (mobile, só quando aberto) */}
+      {open && (
+        <div
+          className="md:hidden fixed inset-0 z-40 bg-black/50"
+          onClick={() => setOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
+      <aside
+        className={cn(
+          'fixed inset-y-0 left-0 z-50 w-64 flex flex-col flex-shrink-0 transform transition-transform duration-200 ease-in-out',
+          'md:static md:h-full md:w-56 xl:w-64 md:translate-x-0',
+          open ? 'translate-x-0' : '-translate-x-full'
+        )}
+        style={{ backgroundColor: '#181614' }}
+      >
 
       {/* Logo */}
       <div className="px-6 py-5 border-b border-white/10">
-        <div className="flex items-center gap-3">
-          <div
-            className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
-            style={{ backgroundColor: '#24a78d' }}
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <div
+              className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
+              style={{ backgroundColor: '#24a78d' }}
+            >
+              {/* Ícone de volante estilizado */}
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10"/>
+                <circle cx="12" cy="12" r="3"/>
+                <line x1="12" y1="2" x2="12" y2="9"/>
+                <line x1="12" y1="15" x2="12" y2="22"/>
+                <line x1="2" y1="12" x2="9" y2="12"/>
+                <line x1="15" y1="12" x2="22" y2="12"/>
+              </svg>
+            </div>
+            <div className="min-w-0">
+              <p className="font-semibold text-white text-sm leading-tight truncate">Grupo Branca</p>
+              <p className="text-[11px] truncate" style={{ color: '#24a78d' }}>CRM Comercial</p>
+            </div>
+          </div>
+          <button
+            onClick={() => setOpen(false)}
+            className="md:hidden text-white/50 hover:text-white p-1 flex-shrink-0"
+            aria-label="Fechar menu"
           >
-            {/* Ícone de volante estilizado */}
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10"/>
-              <circle cx="12" cy="12" r="3"/>
-              <line x1="12" y1="2" x2="12" y2="9"/>
-              <line x1="12" y1="15" x2="12" y2="22"/>
-              <line x1="2" y1="12" x2="9" y2="12"/>
-              <line x1="15" y1="12" x2="22" y2="12"/>
-            </svg>
-          </div>
-          <div>
-            <p className="font-semibold text-white text-sm leading-tight">Grupo Branca</p>
-            <p className="text-[11px]" style={{ color: '#24a78d' }}>CRM Comercial</p>
-          </div>
+            <X className="w-5 h-5" />
+          </button>
         </div>
       </div>
 
@@ -120,6 +169,7 @@ export function Sidebar({ userName, userEmail, userRole }: SidebarProps) {
           </button>
         </div>
       </div>
-    </aside>
+      </aside>
+    </>
   )
 }

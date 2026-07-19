@@ -24,7 +24,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         userEmail={user.email ?? ''}
         userRole={userRole}
       />
-      <main className="flex-1 overflow-auto">
+      {/* pt-14 no mobile reserva espaço pro botão flutuante de abrir o menu
+          (fixed top-3 left-3 na Sidebar) não ficar sobre o conteúdo da página */}
+      <main className="flex-1 overflow-auto pt-14 md:pt-0 min-w-0">
         {children}
       </main>
     </div>
