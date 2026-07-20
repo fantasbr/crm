@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import { Sidebar } from '@/components/crm/sidebar'
+import { AppShell } from '@/components/crm/app-shell'
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient()
@@ -19,16 +19,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="flex h-screen bg-gray-50 min-w-0">
-      <Sidebar
-        userName={userName}
-        userEmail={user.email ?? ''}
-        userRole={userRole}
-      />
-      {/* pt-14 no mobile reserva espaço pro botão flutuante de abrir o menu
-          (fixed top-3 left-3 na Sidebar) não ficar sobre o conteúdo da página */}
-      <main className="flex-1 overflow-auto pt-14 md:pt-0 min-w-0">
+      <AppShell userName={userName} userEmail={user.email ?? ''} userRole={userRole}>
         {children}
-      </main>
+      </AppShell>
     </div>
   )
 }

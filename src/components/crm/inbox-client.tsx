@@ -7,7 +7,7 @@ import { EditContactModal } from '@/components/crm/edit-contact-modal'
 import { DealDetailModal } from '@/components/crm/deal-detail-modal'
 import type { Deal, Contact, User } from '@/types/crm'
 import { cn } from '@/lib/utils'
-import { Send, Plus, Phone, CheckCheck, Clock, Search, Paperclip, FileText, X, Mic, Square, CheckCircle, RotateCcw, Pencil } from 'lucide-react'
+import { Send, Plus, Phone, CheckCheck, Clock, Search, Paperclip, FileText, X, Mic, Square, CheckCircle, RotateCcw, Pencil, ChevronLeft, ChevronRight } from 'lucide-react'
 import type { Database } from '@/lib/supabase/types'
 
 function dbDealToDeal(row: Record<string, unknown>): Deal {
@@ -124,6 +124,7 @@ export function InboxClient({
   const [hasMoreOlder, setHasMoreOlder] = useState(true)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [search, setSearch] = useState('')
+  const [listCollapsed, setListCollapsed] = useState(false)
   const [statusFilter, setStatusFilter] = useState<'open' | 'resolved'>('open')
   const [newDealOpen, setNewDealOpen] = useState(false)
   const [editContactOpen, setEditContactOpen] = useState(false)
@@ -608,8 +609,15 @@ export function InboxClient({
 
       {/* Main layout */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Conversation list */}
-        <div className="w-72 xl:w-80 flex-shrink-0 border-r border-gray-200 flex flex-col bg-white">
+        {/* Conversation list — largura fixa por dentro, clip por fora: assim o
+            conteúdo não quebra/reflui durante a transição de recolher/expandir */}
+        <div
+          className={cn(
+            'flex-shrink-0 border-r border-gray-200 bg-white overflow-hidden transition-all duration-200 ease-in-out',
+            listCollapsed ? 'w-0 border-r-0' : 'w-72 xl:w-80'
+          )}
+        >
+          <div className="w-72 xl:w-80 h-full flex flex-col">
           {/* Status filter */}
           <div className="flex p-2 gap-1 border-b border-gray-100">
             <button
@@ -694,7 +702,22 @@ export function InboxClient({
               )
             })}
           </div>
+          </div>
         </div>
+
+        {/* Faixa para recolher/expandir a Lista de Conversas — sempre visível,
+            mesmo com a lista recolhida, pra sempre dar pra reabrir. A "pílula"
+            tem fundo e borda próprios (não depende de :hover, que não existe
+            em touch) pra não ficar apagada/imperceptível no celular. */}
+        <button
+          onClick={() => setListCollapsed(v => !v)}
+          className="group flex-shrink-0 w-4 border-r border-gray-200 bg-gray-50 hover:bg-gray-100 active:bg-gray-200 flex items-center justify-center transition-colors"
+          title={listCollapsed ? 'Mostrar conversas' : 'Ocultar conversas'}
+        >
+          <span className="flex items-center justify-center w-4 h-9 rounded-full bg-white border border-gray-300 shadow-sm text-gray-500 group-hover:text-brand-500 group-hover:border-brand-300 group-active:text-brand-600 transition-colors">
+            {listCollapsed ? <ChevronRight className="w-3 h-3" /> : <ChevronLeft className="w-3 h-3" />}
+          </span>
+        </button>
 
         {/* Chat panel */}
         {!activeConv ? (
