@@ -141,6 +141,54 @@ export async function POST(req: NextRequest) {
         continue
       }
 
+      // ─── protocolMessage: edição/revogação de mensagem já existente ───────
+      // Formato do payload ainda não confirmado contra esta instância — loga
+      // e ignora tipos desconhecidos em vez de assumir e criar lixo no banco.
+      const protocolMsg = message.protocolMessage as Record<string, unknown> | undefined
+      if (protocolMsg) {
+        try {
+          const targetKey = protocolMsg.key as Record<string, unknown> | undefined
+          const targetWaId = targetKey?.id as string | undefined
+          const protoType = protocolMsg.type as string | undefined
+
+          if (protoType === 'REVOKE' && targetWaId) {
+            const { data: existingMsg } = await supabase
+              .from('crm_messages')
+              .select('id, conversation_id')
+              .eq('wa_message_id', targetWaId)
+              .maybeSingle()
+            if (existingMsg) {
+              await supabase.from('crm_messages').update({ deleted_at: new Date().toISOString() }).eq('id', existingMsg.id)
+              emitInboxEvent({ type: 'message', inboxId: inbox.id, conversationId: existingMsg.conversation_id })
+            }
+          } else if (protoType === 'MESSAGE_EDIT' && targetWaId) {
+            const editedMessage = protocolMsg.editedMessage as Record<string, unknown> | undefined
+            const newBody = (editedMessage?.conversation as string | undefined)
+              ?? (editedMessage?.extendedTextMessage as Record<string, unknown> | undefined)?.text as string | undefined
+            if (newBody) {
+              const { data: existingMsg } = await supabase
+                .from('crm_messages')
+                .select('id, conversation_id, body, original_body')
+                .eq('wa_message_id', targetWaId)
+                .maybeSingle()
+              if (existingMsg) {
+                await supabase.from('crm_messages').update({
+                  body: newBody,
+                  edited_at: new Date().toISOString(),
+                  original_body: existingMsg.original_body ?? existingMsg.body,
+                }).eq('id', existingMsg.id)
+                emitInboxEvent({ type: 'message', inboxId: inbox.id, conversationId: existingMsg.conversation_id })
+              }
+            }
+          } else {
+            console.warn('[webhook] protocolMessage com formato inesperado:', JSON.stringify(protocolMsg))
+          }
+        } catch (err) {
+          console.warn('[webhook] falha ao processar protocolMessage:', err)
+        }
+        continue
+      }
+
       const { body, mediaType, mediaUrl } = extractMediaInfo(msg)
       const waPhone = normalizePhone(remoteJid)
 
@@ -312,7 +360,7 @@ export async function POST(req: NextRequest) {
       if (msgError) console.error('[webhook] falha ao salvar mensagem:', msgError.message, '| convId:', conv.id, '| waId:', waMessageId)
 
       // Notifica clientes SSE conectados
-      emitInboxEvent({ inboxId: inbox.id, conversationId: conv.id })
+      emitInboxEvent({ type: 'message', inboxId: inbox.id, conversationId: conv.id })
 
       // Ponto de extensão AI (apenas inbound)
       if (!fromMe) {
@@ -400,6 +448,44 @@ export async function POST(req: NextRequest) {
           }
         }
       }
+    }
+  }
+
+  // ─── presence.update ────────────────────────────────────────────────────
+  // Espelha a presença do contato (digitando/gravando) pro CRM via SSE.
+  // Nunca persiste no banco (efêmero) e nunca pode derrubar o resto do
+  // webhook — formato do payload ainda não confirmado contra esta instância,
+  // então qualquer coisa inesperada só é logada e ignorada.
+  if (event === 'presence.update') {
+    try {
+      const data = payload.data as Record<string, unknown> | undefined
+      const remoteJid = data?.id as string | undefined
+      const presences = data?.presences as Record<string, { lastKnownPresence?: string }> | undefined
+      if (remoteJid && !remoteJid.endsWith('@g.us') && presences) {
+        const entry = presences[remoteJid] ?? Object.values(presences)[0]
+        const presence = entry?.lastKnownPresence
+        const validPresences = ['composing', 'recording', 'paused', 'available', 'unavailable']
+        if (presence && validPresences.includes(presence)) {
+          const { data: conv } = await supabase
+            .from('crm_conversations')
+            .select('id')
+            .eq('inbox_id', inbox.id)
+            .eq('wa_jid', remoteJid)
+            .maybeSingle()
+          if (conv) {
+            emitInboxEvent({
+              type: 'presence',
+              inboxId: inbox.id,
+              conversationId: conv.id,
+              presence: presence as 'composing' | 'recording' | 'paused' | 'available' | 'unavailable',
+            })
+          }
+        } else {
+          console.warn('[webhook] presence.update com formato inesperado:', JSON.stringify(payload.data))
+        }
+      }
+    } catch (err) {
+      console.warn('[webhook] falha ao processar presence.update:', err)
     }
   }
 

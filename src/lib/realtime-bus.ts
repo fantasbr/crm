@@ -1,9 +1,8 @@
 import { EventEmitter } from 'node:events'
 
-export interface InboxEvent {
-  inboxId: string
-  conversationId: string
-}
+export type InboxEvent =
+  | { type: 'message'; inboxId: string; conversationId: string }
+  | { type: 'presence'; inboxId: string; conversationId: string; presence: 'composing' | 'recording' | 'paused' | 'available' | 'unavailable' }
 
 // Bus em memória — vive enquanto o processo Node viver. Webhook/send emitem,
 // a rota SSE escuta. Funciona com replicas:1 (config atual). Para múltiplas

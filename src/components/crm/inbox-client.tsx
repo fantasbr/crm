@@ -7,8 +7,9 @@ import { EditContactModal } from '@/components/crm/edit-contact-modal'
 import { DealDetailModal } from '@/components/crm/deal-detail-modal'
 import type { Deal, Contact, User } from '@/types/crm'
 import { cn } from '@/lib/utils'
-import { Send, Plus, Phone, CheckCheck, Clock, Search, Paperclip, FileText, X, Mic, Square, CheckCircle, RotateCcw, Pencil, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Send, Plus, Phone, CheckCheck, Clock, Search, Paperclip, FileText, X, Mic, Square, CheckCircle, RotateCcw, Pencil, ChevronLeft, ChevronRight, Ban, RefreshCw } from 'lucide-react'
 import type { Database } from '@/lib/supabase/types'
+import type { InboxEvent } from '@/lib/realtime-bus'
 
 function dbDealToDeal(row: Record<string, unknown>): Deal {
   const contact = row.crm_contacts as Record<string, string>
@@ -134,6 +135,8 @@ export function InboxClient({
   const [pendingFile, setPendingFile] = useState<{ base64: string; type: string; name: string; preview?: string } | null>(null)
   const [recording, setRecording] = useState(false)
   const [recordSeconds, setRecordSeconds] = useState(0)
+  // Presença do contato (digitando/gravando) recebida via SSE — efêmera, nunca persistida
+  const [remotePresence, setRemotePresence] = useState<{ convId: string; presence: string } | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   // Effects sempre disparam uma vez no mount, mesmo sem mudança "real" de
@@ -156,6 +159,11 @@ export function InboxClient({
   // Cache base64 de mídias enviadas pelo CRM (outbound, sem metadata no banco)
   const mediaCacheRef = useRef<Map<string, string>>(new Map())
   const statusFilterRef = useRef<'open' | 'resolved'>('open')
+  // Presença enviada por nós — evita reenviar "composing" a cada tecla
+  const lastPresenceSentRef = useRef<'composing' | 'recording' | 'paused' | null>(null)
+  const presencePauseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Auto-limpeza da presença recebida — o WhatsApp nem sempre avisa quando o contato para
+  const remotePresenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const activeConv = conversations.find(c => c.id === activeConvId) ?? null
   const activeInbox = inboxes.find(i => i.id === activeInboxId) ?? null
@@ -166,6 +174,8 @@ export function InboxClient({
       // Garante que microfone e timer são liberados ao desmontar
       if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop()
       if (recordTimerRef.current) clearInterval(recordTimerRef.current)
+      if (presencePauseTimerRef.current) clearTimeout(presencePauseTimerRef.current)
+      if (remotePresenceTimerRef.current) clearTimeout(remotePresenceTimerRef.current)
     }
   }, [])
 
@@ -306,6 +316,12 @@ export function InboxClient({
     pinnedToBottomRef.current = true
     loadMessages(activeConvId).finally(() => setLoadingMsgs(false))
 
+    // Presença é por conversa — não deve "vazar" pra conversa seguinte
+    lastPresenceSentRef.current = null
+    if (presencePauseTimerRef.current) clearTimeout(presencePauseTimerRef.current)
+    if (remotePresenceTimerRef.current) clearTimeout(remotePresenceTimerRef.current)
+    setRemotePresence(null)
+
     // Mark as read — atualiza local imediatamente; persiste via service client (bypassa RLS)
     setConversations(prev => prev.map(c => c.id === activeConvId ? { ...c, unread_count: 0 } : c))
     fetch('/api/conversations/read', {
@@ -393,8 +409,21 @@ export function InboxClient({
     }
 
     es.onmessage = (e) => {
-      let ev: { inboxId: string; conversationId: string }
+      let ev: InboxEvent
       try { ev = JSON.parse(e.data) } catch { return }
+
+      if (ev.type === 'presence') {
+        if (ev.conversationId !== activeConvIdRef.current) return
+        if (remotePresenceTimerRef.current) clearTimeout(remotePresenceTimerRef.current)
+        if (ev.presence === 'composing' || ev.presence === 'recording') {
+          setRemotePresence({ convId: ev.conversationId, presence: ev.presence })
+          // WhatsApp nem sempre avisa quando o contato para de digitar — expira sozinho
+          remotePresenceTimerRef.current = setTimeout(() => setRemotePresence(null), 8000)
+        } else {
+          setRemotePresence(null)
+        }
+        return // presença não recarrega conversas/mensagens
+      }
 
       loadConversations(activeInboxId)
 
@@ -446,9 +475,26 @@ export function InboxClient({
     reader.readAsDataURL(file)
   }
 
+  // ─── Presença (digitando/gravando) enviada pro WhatsApp ───────────────────
+  // Fire-and-forget e best-effort — nunca deve travar digitação/envio.
+  const sendPresenceUpdate = useCallback((presence: 'composing' | 'recording' | 'paused') => {
+    if (!activeConvId) return
+    if (presence !== 'paused' && lastPresenceSentRef.current === presence) return
+    lastPresenceSentRef.current = presence === 'paused' ? null : presence
+    fetch('/api/whatsapp/presence', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationId: activeConvId, presence }),
+      keepalive: true,
+    }).catch(() => {})
+  }, [activeConvId])
+
   // ─── Voice recording ─────────────────────────────────────────────────────
   const startRecording = async () => {
     if (recording) return
+    // Cancela um timer de "parou de digitar" pendente — sem isso, ele podia
+    // disparar 'paused' alguns segundos depois de já termos enviado 'recording'
+    if (presencePauseTimerRef.current) clearTimeout(presencePauseTimerRef.current)
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
@@ -475,6 +521,7 @@ export function InboxClient({
         if (recordTimerRef.current) clearInterval(recordTimerRef.current)
         setRecording(false)
         setRecordSeconds(0)
+        sendPresenceUpdate('paused')
       }
 
       recorder.start()
@@ -482,6 +529,7 @@ export function InboxClient({
       setRecording(true)
       setRecordSeconds(0)
       recordTimerRef.current = setInterval(() => setRecordSeconds(s => s + 1), 1000)
+      sendPresenceUpdate('recording')
     } catch {
       setSendError('Não foi possível acessar o microfone.')
     }
@@ -492,13 +540,39 @@ export function InboxClient({
   }
 
   // ─── Send message ─────────────────────────────────────────────────────────
+  // POST compartilhado por envio normal e retry manual. A mensagem já é
+  // persistida como 'pending' no banco pelo backend antes de chamar a
+  // Evolution API (envio otimista) — por isso não precisamos de um estado
+  // "otimista" local aqui: o SSE emitido logo após o insert já traz o
+  // refreshMessages a tempo de mostrar o relógio de "pendente" na tela.
+  const postSend = async (payload: Record<string, unknown>): Promise<{ ok: boolean; messageId: string | null; error?: string; retryable?: boolean }> => {
+    try {
+      const res = await fetch('/api/whatsapp/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const j = await res.json().catch(() => ({})) as { ok?: boolean; messageId?: string | null; error?: string; detail?: string; retryable?: boolean }
+      if (!res.ok) {
+        const msg = j.detail ? `${j.error}: ${j.detail}` : (j.error ?? `Erro ${res.status}`)
+        return { ok: false, messageId: j.messageId ?? null, error: msg, retryable: j.retryable }
+      }
+      return { ok: true, messageId: j.messageId ?? null }
+    } catch (err) {
+      return { ok: false, messageId: null, error: String(err), retryable: true }
+    }
+  }
+
   const handleSend = async () => {
     const hasText = text.trim().length > 0
     const hasMedia = !!pendingFile
     if ((!hasText && !hasMedia) || !activeConvId || sending) return
+    if (presencePauseTimerRef.current) clearTimeout(presencePauseTimerRef.current)
+    sendPresenceUpdate('paused')
     setSending(true)
     setSendError(null)
 
+    const clientRef = crypto.randomUUID()
     const payload = hasMedia
       ? {
           conversationId: activeConvId,
@@ -506,49 +580,59 @@ export function InboxClient({
           mediaType: pendingFile.type,
           fileName: pendingFile.name,
           caption: text.trim() || undefined,
+          clientRef,
         }
-      : { conversationId: activeConvId, text: text.trim() }
+      : { conversationId: activeConvId, text: text.trim(), clientRef }
 
-    // Captura antes de limpar o estado — closures React preservam o valor snapshot
+    // Captura antes de limpar — a mensagem falha vira uma bolha "failed" com
+    // retry próprio na conversa, então não restauramos mais o texto/mídia no
+    // input em caso de erro (evitaria duplicar: bolha falha + texto de volta).
     const snapshotFile = pendingFile
-    const savedText = text
     setText('')
     setPendingFile(null)
 
-    try {
-      const res = await fetch('/api/whatsapp/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-      if (!res.ok) {
-        // Restaura o que foi limpo para o usuário tentar de novo
-        setText(savedText)
-        if (hasMedia) setPendingFile(snapshotFile)
-        let msg = `Erro ${res.status}`
-        try {
-          const j = await res.json() as { error?: string; detail?: string }
-          msg = j.detail ? `${j.error}: ${j.detail}` : (j.error ?? msg)
-        } catch { /* corpo não-JSON */ }
-        setSendError(msg)
-        console.error('Send failed', msg)
-      } else {
-        const j = await res.json() as { ok: boolean; messageId?: string | null }
-        // Armazena base64 localmente para renderizar a mídia outbound no histórico
-        if (hasMedia && snapshotFile && j.messageId) {
-          mediaCacheRef.current.set(j.messageId, snapshotFile.base64)
-        }
-        // Usa ref para pegar o convId atual (pode ter mudado durante o await)
-        const convIdNow = activeConvIdRef2.current
-        if (convIdNow) refreshMessages(convIdNow)
-      }
-    } catch (err) {
-      setText(savedText)
-      if (hasMedia) setPendingFile(snapshotFile)
-      setSendError(String(err))
-    } finally {
-      setSending(false)
+    const result = await postSend(payload)
+    if (hasMedia && snapshotFile && result.messageId) {
+      // Cache local pra renderizar a mídia (e permitir retry) sem depender do MinIO
+      mediaCacheRef.current.set(result.messageId, snapshotFile.base64)
     }
+    if (!result.ok) {
+      setSendError(result.error ?? 'Falha ao enviar')
+      console.error('Send failed', result.error)
+    }
+    // Usa ref para pegar o convId atual (pode ter mudado durante o await)
+    const convIdNow = activeConvIdRef2.current
+    if (convIdNow) refreshMessages(convIdNow)
+    setSending(false)
+  }
+
+  // Retry manual de uma mensagem 'failed' — reaproveita o client_ref da
+  // própria mensagem (se existir) em vez de gerar um novo: isso garante que,
+  // se a tentativa anterior tiver sido enviada de verdade apesar do erro
+  // (falha ambígua de rede), o backend detecta e NÃO reenvia duplicado.
+  const handleRetrySend = async (msg: DbMessage) => {
+    if (!activeConvId) return
+    const clientRef = msg.client_ref ?? crypto.randomUUID()
+    const isMediaMsg = !!msg.media_type
+    const cachedBase64 = mediaCacheRef.current.get(msg.id)
+    if (isMediaMsg && !cachedBase64) {
+      setSendError('Não é possível reenviar essa mídia — recarregue a página e envie de novo.')
+      return
+    }
+    const payload = isMediaMsg
+      ? {
+          conversationId: activeConvId,
+          mediaBase64: cachedBase64,
+          mediaType: msg.media_type,
+          caption: msg.body && !msg.body.startsWith('[') ? msg.body : undefined,
+          clientRef,
+        }
+      : { conversationId: activeConvId, text: msg.body, clientRef }
+
+    const result = await postSend(payload)
+    if (!result.ok) setSendError(result.error ?? 'Falha ao reenviar')
+    const convIdNow = activeConvIdRef2.current
+    if (convIdNow) refreshMessages(convIdNow)
   }
 
   // ─── Concluir / Reabrir conversa ─────────────────────────────────────────
@@ -759,11 +843,19 @@ export function InboxClient({
                       </button>
                     )}
                   </div>
-                  {activeConv.crm_contacts?.phone && (
-                    <p className="text-xs text-gray-500">{activeConv.crm_contacts.phone}</p>
-                  )}
-                  {activeConv.crm_contacts?.wa_push_name && activeConv.crm_contacts.wa_push_name !== activeConv.crm_contacts.name && (
-                    <p className="text-xs text-gray-400">Nome WhatsApp: {activeConv.crm_contacts.wa_push_name}</p>
+                  {remotePresence?.convId === activeConvId ? (
+                    <p className="text-xs text-brand-500 font-medium animate-pulse">
+                      {remotePresence.presence === 'recording' ? 'gravando áudio...' : 'digitando...'}
+                    </p>
+                  ) : (
+                    <>
+                      {activeConv.crm_contacts?.phone && (
+                        <p className="text-xs text-gray-500">{activeConv.crm_contacts.phone}</p>
+                      )}
+                      {activeConv.crm_contacts?.wa_push_name && activeConv.crm_contacts.wa_push_name !== activeConv.crm_contacts.name && (
+                        <p className="text-xs text-gray-400">Nome WhatsApp: {activeConv.crm_contacts.wa_push_name}</p>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
@@ -829,12 +921,13 @@ export function InboxClient({
                 const showDateSeparator = !prevMsg ||
                   new Date(prevMsg.created_at).toDateString() !== new Date(msg.created_at).toDateString()
                 const isOut = msg.direction === 'outbound'
+                const isDeleted = !!msg.deleted_at
                 const mt = msg.media_type
                 const hasMedia = !!mt
                 // Cache local: mídia enviada pelo CRM (sent_by preenchido, sem metadata no banco)
                 const cachedBase64 = mediaCacheRef.current.get(msg.id)
                 // Renderiza mídia se: inbound, outbound Evolution (sent_by null), ou outbound CRM com cache
-                const canRenderMedia = hasMedia && (
+                const canRenderMedia = !isDeleted && hasMedia && (
                   msg.direction === 'inbound' || msg.sent_by === null || !!cachedBase64
                 )
                 const mediaSrc = cachedBase64 ?? `/api/whatsapp/media?messageId=${msg.id}`
@@ -843,7 +936,7 @@ export function InboxClient({
                 const isVideo = canRenderMedia && mt?.startsWith('video/')
                 const isDoc = canRenderMedia && !isImage && !isAudio && !isVideo
                 // show text body if no media to render, or if body is a user caption (not auto brackets)
-                const showBody = !canRenderMedia || (msg.body && !msg.body.startsWith('['))
+                const showBody = !isDeleted && (!canRenderMedia || (msg.body && !msg.body.startsWith('[')))
 
                 return (
                   <Fragment key={msg.id}>
@@ -898,6 +991,11 @@ export function InboxClient({
                         </a>
                       )}
 
+                      {isDeleted && (
+                        <p className={cn('flex items-center gap-1.5 italic px-3.5 py-2', isOut ? 'text-white/70' : 'text-gray-400')}>
+                          <Ban className="w-3.5 h-3.5 flex-shrink-0" /> Mensagem apagada
+                        </p>
+                      )}
                       {showBody && (
                         <p className="whitespace-pre-wrap break-words px-3.5 py-2">{msg.body}</p>
                       )}
@@ -916,6 +1014,9 @@ export function InboxClient({
                             </span>
                           ) : null
                         })()}
+                        {msg.edited_at && !isDeleted && (
+                          <span className="text-[10px] italic opacity-70" title={msg.original_body ?? undefined}>editado</span>
+                        )}
                         <span className="text-[10px]">{mounted ? formatMsgTime(msg.created_at) : ''}</span>
                         {isOut && (
                           msg.status === 'read' ? (
@@ -923,7 +1024,14 @@ export function InboxClient({
                           ) : msg.status === 'delivered' ? (
                             <CheckCheck className="w-3 h-3" />
                           ) : msg.status === 'failed' ? (
-                            <span className="text-[10px] text-red-300">!</span>
+                            <button
+                              onClick={() => handleRetrySend(msg)}
+                              className="flex items-center gap-0.5 text-[10px] text-red-300 hover:text-red-100 transition-colors"
+                              title="Falha ao enviar — clique para tentar de novo"
+                            >
+                              <span>!</span>
+                              <RefreshCw className="w-3 h-3" />
+                            </button>
                           ) : (
                             <Clock className="w-3 h-3" />
                           )
@@ -1010,6 +1118,10 @@ export function InboxClient({
                         setText(e.target.value)
                         e.target.style.height = 'auto'
                         e.target.style.height = Math.min(e.target.scrollHeight, 128) + 'px'
+
+                        sendPresenceUpdate('composing')
+                        if (presencePauseTimerRef.current) clearTimeout(presencePauseTimerRef.current)
+                        presencePauseTimerRef.current = setTimeout(() => sendPresenceUpdate('paused'), 4000)
                       }}
                       onKeyDown={e => {
                         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
