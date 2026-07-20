@@ -1,18 +1,22 @@
 import { createClient } from '@/lib/supabase/server'
-import { TrendingUp, DollarSign, Users, Target } from 'lucide-react'
+import { TrendingUp, DollarSign, Users, Target, MessageCircle } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
 
 export default async function DashboardPage() {
   const supabase = await createClient()
 
-  const [dealsRes, contactsRes] = await Promise.all([
+  const [dealsRes, contactsRes, openConvsRes, resolvedConvsRes] = await Promise.all([
     supabase.from('crm_deals').select('status, temperature, negotiated_value, assigned_to, stage_id, crm_users!crm_deals_assigned_to_fkey(name)'),
     supabase.from('crm_contacts').select('id', { count: 'exact', head: true }),
+    supabase.from('crm_conversations').select('id', { count: 'exact', head: true }).eq('status', 'open'),
+    supabase.from('crm_conversations').select('id', { count: 'exact', head: true }).eq('status', 'resolved'),
   ])
 
   const deals = dealsRes.data ?? []
   const totalContacts = contactsRes.count ?? 0
+  const openConversations = openConvsRes.count ?? 0
+  const resolvedConversations = resolvedConvsRes.count ?? 0
 
   const openDeals = deals.filter(d => d.status === 'open')
   const wonDeals = deals.filter(d => d.status === 'won')
@@ -46,7 +50,7 @@ export default async function DashboardPage() {
       </div>
 
       {/* Métricas */}
-      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4 xl:gap-5 mb-6 xl:mb-8">
+      <div className="grid grid-cols-2 xl:grid-cols-5 gap-4 xl:gap-5 mb-6 xl:mb-8">
         {[
           { label: 'Deals Ativos', value: openDeals.length, sub: `${wonDeals.length} ganhos`, icon: Target, bg: 'bg-brand-50', color: 'text-brand-500' },
           { label: 'Em Negociação', value: totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }), sub: 'Potencial em aberto', icon: DollarSign, bg: 'bg-amber-50', color: 'text-amber-600' },
@@ -64,6 +68,27 @@ export default async function DashboardPage() {
             <p className="text-xs text-gray-500 mt-1">{sub}</p>
           </div>
         ))}
+
+        {/* Conversas do Inbox — um card só, com as duas contagens lado a lado */}
+        <div className="bg-white rounded-xl border border-gray-200 p-5">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-sm text-gray-500">Conversas</span>
+            <div className="w-8 h-8 bg-blue-50 rounded-lg flex items-center justify-center">
+              <MessageCircle className="w-4 h-4 text-blue-600" />
+            </div>
+          </div>
+          <div className="flex items-end gap-4">
+            <div>
+              <p className="text-2xl font-bold text-gray-900">{openConversations}</p>
+              <p className="text-xs text-gray-500 mt-1">Abertas</p>
+            </div>
+            <div className="w-px h-8 bg-gray-100" />
+            <div>
+              <p className="text-2xl font-bold text-gray-900">{resolvedConversations}</p>
+              <p className="text-xs text-gray-500 mt-1">Concluídas</p>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 xl:gap-5">

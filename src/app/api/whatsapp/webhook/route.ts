@@ -113,6 +113,21 @@ export async function POST(req: NextRequest) {
   }
   console.log('[webhook] event:', event, '| inbox:', inbox.name, '| instance:', instanceName)
 
+  // Marca uma mensagem já existente como apagada, pelo wa_message_id — usado
+  // tanto pelo REVOKE via protocolMessage quanto pelo evento messages.delete
+  // (a Evolution manda os dois dependendo da versão/forma de exclusão).
+  const markMessageDeleted = async (waMessageId: string) => {
+    const { data: existingMsg } = await supabase
+      .from('crm_messages')
+      .select('id, conversation_id')
+      .eq('wa_message_id', waMessageId)
+      .maybeSingle()
+    if (existingMsg) {
+      await supabase.from('crm_messages').update({ deleted_at: new Date().toISOString() }).eq('id', existingMsg.id)
+      emitInboxEvent({ type: 'message', inboxId: inbox.id, conversationId: existingMsg.conversation_id })
+    }
+  }
+
   // ─── messages.upsert + send.message ──────────────────────────────────────
   // send.message dispara quando Chatwoot (ou outro cliente) envia via Evolution API.
   // O payload é idêntico ao messages.upsert, sempre com fromMe: true.
@@ -152,15 +167,7 @@ export async function POST(req: NextRequest) {
           const protoType = protocolMsg.type as string | undefined
 
           if (protoType === 'REVOKE' && targetWaId) {
-            const { data: existingMsg } = await supabase
-              .from('crm_messages')
-              .select('id, conversation_id')
-              .eq('wa_message_id', targetWaId)
-              .maybeSingle()
-            if (existingMsg) {
-              await supabase.from('crm_messages').update({ deleted_at: new Date().toISOString() }).eq('id', existingMsg.id)
-              emitInboxEvent({ type: 'message', inboxId: inbox.id, conversationId: existingMsg.conversation_id })
-            }
+            await markMessageDeleted(targetWaId)
           } else if (protoType === 'MESSAGE_EDIT' && targetWaId) {
             const editedMessage = protocolMsg.editedMessage as Record<string, unknown> | undefined
             const newBody = (editedMessage?.conversation as string | undefined)
@@ -372,6 +379,36 @@ export async function POST(req: NextRequest) {
           newMessageBody: body,
         })
       }
+    }
+  }
+
+  // ─── messages.delete ────────────────────────────────────────────────────
+  // Evento dedicado de exclusão (além do REVOKE via protocolMessage acima —
+  // a Evolution manda um ou outro dependendo da versão/forma de exclusão).
+  // Formato do payload ainda não confirmado: tenta os formatos mais comuns
+  // (array de keys, ou uma key única) e loga o que não reconhecer.
+  if (event === 'messages.delete') {
+    try {
+      const data = payload.data as Record<string, unknown> | Record<string, unknown>[] | undefined
+      const keysArray: Record<string, unknown>[] = Array.isArray(data)
+        ? data
+        : Array.isArray((data as Record<string, unknown>)?.keys)
+          ? (data as Record<string, unknown>).keys as Record<string, unknown>[]
+          : data ? [data] : []
+
+      let handled = 0
+      for (const k of keysArray) {
+        const waId = (k.id as string | undefined) ?? (k.keyId as string | undefined)
+        if (waId) {
+          await markMessageDeleted(waId)
+          handled++
+        }
+      }
+      if (handled === 0) {
+        console.warn('[webhook] messages.delete com formato inesperado:', JSON.stringify(payload.data))
+      }
+    } catch (err) {
+      console.warn('[webhook] falha ao processar messages.delete:', err)
     }
   }
 

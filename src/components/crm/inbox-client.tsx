@@ -103,6 +103,14 @@ function formatDateSeparator(iso: string) {
 
 const MESSAGES_PAGE_SIZE = 100
 
+// DESLIGADO por enquanto: a Evolution API define presença por INSTANCE
+// inteiro (sem destinatário no endpoint, confirmado na documentação
+// oficial), não por conversa — com mais de um atendimento simultâneo no
+// mesmo inbox, o indicador podia aparecer pro contato errado. O
+// recebimento de presença do contato (mostrar "digitando..." no cabeçalho)
+// não tem esse problema e continua ativo normalmente.
+const SEND_PRESENCE_ENABLED = false
+
 export function InboxClient({
   inboxes,
   initialConversations,
@@ -125,6 +133,8 @@ export function InboxClient({
   const [hasMoreOlder, setHasMoreOlder] = useState(true)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [search, setSearch] = useState('')
+  const [hasMoreConversations, setHasMoreConversations] = useState(true)
+  const [loadingMoreConversations, setLoadingMoreConversations] = useState(false)
   const [listCollapsed, setListCollapsed] = useState(false)
   const [statusFilter, setStatusFilter] = useState<'open' | 'resolved'>('open')
   const [newDealOpen, setNewDealOpen] = useState(false)
@@ -159,6 +169,8 @@ export function InboxClient({
   // Cache base64 de mídias enviadas pelo CRM (outbound, sem metadata no banco)
   const mediaCacheRef = useRef<Map<string, string>>(new Map())
   const statusFilterRef = useRef<'open' | 'resolved'>('open')
+  const searchRef = useRef('')
+  const conversationListRef = useRef<HTMLDivElement>(null)
   // Presença enviada por nós — evita reenviar "composing" a cada tecla
   const lastPresenceSentRef = useRef<'composing' | 'recording' | 'paused' | null>(null)
   const presencePauseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -187,25 +199,104 @@ export function InboxClient({
   }, [activeConvId])
 
   useEffect(() => { statusFilterRef.current = statusFilter }, [statusFilter])
+  useEffect(() => { searchRef.current = search }, [search])
 
-  // ─── Load conversations when inbox or filter changes ─────────────────────
+  const CONV_PAGE_SIZE = 50
+  const conversationSelect = '*, crm_contacts(id, name, phone, email, origin, wa_push_name, avatar_url)'
+
+  // ─── Load conversations when inbox ou filtro muda (sem busca ativa) ───────
+  // Só traz as CONV_PAGE_SIZE mais recentes — loadOlderConversations pagina
+  // o resto sob demanda (rolar até o fim da lista).
   const loadConversations = useCallback(async (inboxId: string) => {
     const { data } = await supabase
       .from('crm_conversations')
-      .select('*, crm_contacts(id, name, phone, email, origin, wa_push_name, avatar_url)')
+      .select(conversationSelect)
       .eq('inbox_id', inboxId)
       .eq('status', statusFilterRef.current)
       .order('last_message_at', { ascending: false })
-      .limit(50)
+      .limit(CONV_PAGE_SIZE)
+    const list = (data ?? []) as DbConversation[]
     // Preserva o zero local da conversa ativa para evitar race condition com SSE:
     // o SSE dispara loadConversations antes do mark-as-read persistir no banco.
     const activeId = activeConvIdRef.current
-    setConversations(
-      ((data ?? []) as DbConversation[]).map(c =>
-        c.id === activeId ? { ...c, unread_count: 0 } : c
-      )
-    )
+    setConversations(list.map(c => c.id === activeId ? { ...c, unread_count: 0 } : c))
+    setHasMoreConversations(list.length === CONV_PAGE_SIZE)
   }, [supabase])
+
+  // ─── Carrega mais conversas antigas (scroll até o fim da lista) ───────────
+  const loadOlderConversations = useCallback(async () => {
+    if (loadingMoreConversations || !hasMoreConversations || !activeInboxId || searchRef.current.trim()) return
+    const oldest = conversations[conversations.length - 1]
+    if (!oldest?.last_message_at) { setHasMoreConversations(false); return }
+    setLoadingMoreConversations(true)
+    const { data } = await supabase
+      .from('crm_conversations')
+      .select(conversationSelect)
+      .eq('inbox_id', activeInboxId)
+      .eq('status', statusFilterRef.current)
+      .lt('last_message_at', oldest.last_message_at)
+      .order('last_message_at', { ascending: false })
+      .limit(CONV_PAGE_SIZE)
+    const older = (data ?? []) as DbConversation[]
+    setHasMoreConversations(older.length === CONV_PAGE_SIZE)
+    if (older.length > 0) setConversations(prev => [...prev, ...older])
+    setLoadingMoreConversations(false)
+  }, [supabase, loadingMoreConversations, hasMoreConversations, activeInboxId, conversations])
+
+  const handleConversationListScroll = () => {
+    const container = conversationListRef.current
+    if (!container) return
+    if (container.scrollHeight - container.scrollTop - container.clientHeight < 150) loadOlderConversations()
+  }
+
+  // ─── Busca — consulta o banco direto em vez de filtrar só o que já foi
+  // carregado, senão uma conversa fora das CONV_PAGE_SIZE mais recentes nunca
+  // aparecia na busca mesmo existindo. Sem paginação: resultado já é o
+  // conjunto completo de conversas que combinam com o termo.
+  const searchConversations = useCallback(async (inboxId: string, rawQuery: string) => {
+    const q = rawQuery.trim()
+    if (!q) return
+    const digits = q.replace(/\D/g, '')
+
+    const [byName, byPhone] = await Promise.all([
+      supabase.from('crm_contacts').select('id').ilike('name', `%${q}%`),
+      digits ? supabase.from('crm_contacts').select('id').ilike('phone', `%${digits}%`) : Promise.resolve({ data: [] as { id: string }[] }),
+    ])
+    const contactIds = [...new Set([...(byName.data ?? []), ...(byPhone.data ?? [])].map(c => c.id))]
+
+    const [byContact, byJid] = await Promise.all([
+      contactIds.length > 0
+        ? supabase.from('crm_conversations').select(conversationSelect)
+            .eq('inbox_id', inboxId).eq('status', statusFilterRef.current)
+            .in('contact_id', contactIds)
+            .order('last_message_at', { ascending: false }).limit(CONV_PAGE_SIZE)
+        : Promise.resolve({ data: [] as DbConversation[] }),
+      supabase.from('crm_conversations').select(conversationSelect)
+        .eq('inbox_id', inboxId).eq('status', statusFilterRef.current)
+        .ilike('wa_jid', `%${digits || q}%`)
+        .order('last_message_at', { ascending: false }).limit(CONV_PAGE_SIZE),
+    ])
+
+    const merged = new Map<string, DbConversation>()
+    for (const c of [...(byContact.data ?? []), ...(byJid.data ?? [])] as DbConversation[]) merged.set(c.id, c)
+    const results = [...merged.values()].sort((a, b) => (b.last_message_at ?? '').localeCompare(a.last_message_at ?? ''))
+
+    const activeId = activeConvIdRef.current
+    setConversations(results.map(c => c.id === activeId ? { ...c, unread_count: 0 } : c))
+    setHasMoreConversations(false) // busca traz o conjunto inteiro, não pagina
+  }, [supabase])
+
+  // Ponto único usado por SSE/poll/toggle-status — decide sozinho se deve
+  // recarregar a lista padrão ou re-rodar a busca ativa, pra um evento em
+  // background (ex: mensagem nova em outra conversa) não apagar o resultado
+  // da busca que o usuário está vendo.
+  const refreshConversationList = useCallback(async (inboxId: string) => {
+    if (searchRef.current.trim()) {
+      await searchConversations(inboxId, searchRef.current)
+    } else {
+      await loadConversations(inboxId)
+    }
+  }, [loadConversations, searchConversations])
 
   // ─── Load messages for a conversation ─────────────────────────────────────
   // Busca as MAIS RECENTES (desc + limit) e reverte para ordem cronológica —
@@ -281,10 +372,18 @@ export function InboxClient({
     setActiveConvId(null)
   }, [activeInboxId, statusFilter])
 
-  // Recarrega a lista de conversas
+  // Recarrega a lista de conversas — troca de inbox/filtro é imediata, busca
+  // tem debounce pra não consultar o banco a cada tecla (limpar a busca
+  // volta pra lista padrão na hora, sem esperar o debounce)
   useEffect(() => {
-    if (activeInboxId) loadConversations(activeInboxId)
-  }, [activeInboxId, statusFilter, loadConversations])
+    if (!activeInboxId) return
+    const delay = search.trim() ? 300 : 0
+    const t = setTimeout(() => {
+      if (search.trim()) searchConversations(activeInboxId, search)
+      else loadConversations(activeInboxId)
+    }, delay)
+    return () => clearTimeout(t)
+  }, [activeInboxId, statusFilter, search, loadConversations, searchConversations])
 
   // ─── Auto-select from URL params ─────────────────────────────────────────
   useEffect(() => {
@@ -405,7 +504,7 @@ export function InboxClient({
     // Reconexão automática: recarrega a lista para recuperar eventos perdidos
     // durante a desconexão (SSE não faz replay; onopen dispara a cada reconect).
     es.onopen = () => {
-      loadConversations(activeInboxId)
+      refreshConversationList(activeInboxId)
     }
 
     es.onmessage = (e) => {
@@ -425,7 +524,7 @@ export function InboxClient({
         return // presença não recarrega conversas/mensagens
       }
 
-      loadConversations(activeInboxId)
+      refreshConversationList(activeInboxId)
 
       // Sempre recarrega a conversa aberta — o webhook pode ter encontrado uma
       // conversa diferente via dedup "1 por contato", então não filtramos por
@@ -447,10 +546,10 @@ export function InboxClient({
 
     // Polling de segurança: garante atualização mesmo se o SSE perder eventos.
     // Intervalo longo para não sobrecarregar — SSE é o caminho principal.
-    const poll = setInterval(() => loadConversations(activeInboxId), 30_000)
+    const poll = setInterval(() => refreshConversationList(activeInboxId), 30_000)
 
     return () => { es.close(); clearInterval(poll) }
-  }, [activeInboxId, loadConversations, refreshMessages])
+  }, [activeInboxId, refreshConversationList, refreshMessages])
 
   // ─── File picker ──────────────────────────────────────────────────────────
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -477,7 +576,9 @@ export function InboxClient({
 
   // ─── Presença (digitando/gravando) enviada pro WhatsApp ───────────────────
   // Fire-and-forget e best-effort — nunca deve travar digitação/envio.
+  //
   const sendPresenceUpdate = useCallback((presence: 'composing' | 'recording' | 'paused') => {
+    if (!SEND_PRESENCE_ENABLED) return
     if (!activeConvId) return
     if (presence !== 'paused' && lastPresenceSentRef.current === presence) return
     lastPresenceSentRef.current = presence === 'paused' ? null : presence
@@ -644,7 +745,7 @@ export function InboxClient({
       .update({ status: newStatus })
       .eq('id', activeConvId)
     setActiveConvId(null)
-    loadConversations(activeInboxId)
+    refreshConversationList(activeInboxId)
   }
 
   // ─── Filtered conversations ───────────────────────────────────────────────
@@ -740,7 +841,11 @@ export function InboxClient({
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto divide-y divide-gray-50">
+          <div
+            ref={conversationListRef}
+            onScroll={handleConversationListScroll}
+            className="flex-1 overflow-y-auto divide-y divide-gray-50"
+          >
             {filtered.length === 0 && (
               <div className="text-center py-10 text-gray-400 text-sm">
                 {activeInbox ? 'Nenhuma conversa' : 'Selecione um inbox'}
@@ -790,6 +895,9 @@ export function InboxClient({
                 </button>
               )
             })}
+            {loadingMoreConversations && (
+              <div className="text-center text-gray-400 text-xs py-3">Carregando mais conversas...</div>
+            )}
           </div>
           </div>
         </div>

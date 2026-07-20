@@ -21,15 +21,16 @@ export async function POST(req: NextRequest) {
   const supabase = createServiceClient()
   const { data: conv } = await supabase
     .from('crm_conversations')
-    .select('wa_jid, crm_inboxes(wa_instance)')
+    .select('crm_inboxes(wa_instance)')
     .eq('id', conversationId)
     .maybeSingle()
 
+  // A Evolution API define presença por instance inteiro, não por conversa
+  // (sem campo de destinatário no endpoint) — ver comentário em sendPresence.
   const waInstance = (conv?.crm_inboxes as { wa_instance: string } | null)?.wa_instance
-  if (!conv || !waInstance) return NextResponse.json({ ok: true }) // best-effort, não falha a UI
+  if (!waInstance) return NextResponse.json({ ok: true }) // best-effort, não falha a UI
 
-  const number = conv.wa_jid.split('@')[0].replace(/\D/g, '')
-  await sendPresence(waInstance, number, presence)
+  await sendPresence(waInstance, presence)
 
   return NextResponse.json({ ok: true })
 }
