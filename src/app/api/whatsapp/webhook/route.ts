@@ -123,8 +123,8 @@ export async function POST(req: NextRequest) {
       .eq('wa_message_id', waMessageId)
       .maybeSingle()
     if (existingMsg) {
+      // O UPDATE já dispara postgres_changes pra quem estiver assinando o inbox
       await supabase.from('crm_messages').update({ deleted_at: new Date().toISOString() }).eq('id', existingMsg.id)
-      emitInboxEvent({ type: 'message', inboxId: inbox.id, conversationId: existingMsg.conversation_id })
     }
   }
 
@@ -179,12 +179,12 @@ export async function POST(req: NextRequest) {
                 .eq('wa_message_id', targetWaId)
                 .maybeSingle()
               if (existingMsg) {
+                // O UPDATE já dispara postgres_changes pra quem estiver assinando o inbox
                 await supabase.from('crm_messages').update({
                   body: newBody,
                   edited_at: new Date().toISOString(),
                   original_body: existingMsg.original_body ?? existingMsg.body,
                 }).eq('id', existingMsg.id)
-                emitInboxEvent({ type: 'message', inboxId: inbox.id, conversationId: existingMsg.conversation_id })
               }
             }
           } else {
@@ -366,8 +366,7 @@ export async function POST(req: NextRequest) {
         )
       if (msgError) console.error('[webhook] falha ao salvar mensagem:', msgError.message, '| convId:', conv.id, '| waId:', waMessageId)
 
-      // Notifica clientes SSE conectados
-      emitInboxEvent({ type: 'message', inboxId: inbox.id, conversationId: conv.id })
+      // O upsert acima já dispara postgres_changes pra quem estiver assinando o inbox
 
       // Ponto de extensão AI (apenas inbound)
       if (!fromMe) {
@@ -511,7 +510,6 @@ export async function POST(req: NextRequest) {
             .maybeSingle()
           if (conv) {
             emitInboxEvent({
-              type: 'presence',
               inboxId: inbox.id,
               conversationId: conv.id,
               presence: presence as 'composing' | 'recording' | 'paused' | 'available' | 'unavailable',

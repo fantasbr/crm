@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils'
 import { Send, Plus, Phone, CheckCheck, Clock, Search, Paperclip, FileText, X, Mic, Square, CheckCircle, RotateCcw, Pencil, ChevronLeft, ChevronRight, Ban, RefreshCw } from 'lucide-react'
 import type { Database } from '@/lib/supabase/types'
 import type { InboxEvent } from '@/lib/realtime-bus'
+import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js'
 
 function dbDealToDeal(row: Record<string, unknown>): Deal {
   const contact = row.crm_contacts as Record<string, string>
@@ -216,10 +217,20 @@ export function InboxClient({
       .order('last_message_at', { ascending: false })
       .limit(CONV_PAGE_SIZE)
     const list = (data ?? []) as DbConversation[]
+    const activeId = activeConvIdRef.current
     // Preserva o zero local da conversa ativa para evitar race condition com SSE:
     // o SSE dispara loadConversations antes do mark-as-read persistir no banco.
-    const activeId = activeConvIdRef.current
-    setConversations(list.map(c => c.id === activeId ? { ...c, unread_count: 0 } : c))
+    const withUnreadZero = list.map(c => c.id === activeId ? { ...c, unread_count: 0 } : c)
+    setConversations(prev => {
+      // A conversa aberta pode estar fora da janela das CONV_PAGE_SIZE mais
+      // recentes (ex: aberta via "Ver no Inbox" de um deal antigo) — sem
+      // isso, um refresh em segundo plano (SSE/poll) a fazia "sumir" da tela.
+      if (activeId && !withUnreadZero.some(c => c.id === activeId)) {
+        const kept = prev.find(c => c.id === activeId)
+        if (kept) return [{ ...kept, unread_count: 0 }, ...withUnreadZero]
+      }
+      return withUnreadZero
+    })
     setHasMoreConversations(list.length === CONV_PAGE_SIZE)
   }, [supabase])
 
@@ -496,60 +507,100 @@ export function InboxClient({
     return () => observer.disconnect()
   }, [])
 
-  // ─── Tempo real via SSE (backend do CRM, sem WebSocket do Supabase) ───────
+  // ─── Tempo real via Supabase Realtime — mensagens e conversas ─────────────
+  // Substitui o SSE customizado (que só funcionava com 1 réplica Docker) por
+  // postgres_changes: o Postgres avisa direto via WAL, sem precisar de um
+  // emit manual em cada rota que grava em crm_messages/crm_conversations.
+  useEffect(() => {
+    if (!activeInboxId) return
+
+    let channel: ReturnType<typeof supabase.channel> | null = null
+    let cancelled = false
+
+    const setup = async () => {
+      // A RLS de crm_messages/crm_conversations é `TO authenticated USING (true)`.
+      // O postgres_changes respeita essa policy: sem o JWT do usuário, o canal
+      // conecta como `anon`, faz o join (status SUBSCRIBED) mas a RLS filtra
+      // 100% dos eventos — assinado e mudo. O createBrowserClient propaga o
+      // token via evento de auth assíncrono, que pode chegar depois do subscribe;
+      // setar explícito aqui elimina essa corrida.
+      const { data: { session } } = await supabase.auth.getSession()
+      if (cancelled) return
+      if (session?.access_token) await supabase.realtime.setAuth(session.access_token)
+      if (cancelled) return
+
+      channel = supabase
+        .channel(`inbox-${activeInboxId}-changes`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'crm_messages', filter: `inbox_id=eq.${activeInboxId}` },
+          (payload: RealtimePostgresChangesPayload<DbMessage>) => {
+            refreshConversationList(activeInboxId)
+            // payload.new/old é o valor real da linha alterada — mais confiável
+            // que o conversationId sintetizado que o SSE antigo carregava, então
+            // não precisa mais recarregar mensagens "por precaução" independente
+            // de bater com a conversa aberta.
+            const row = (payload.new ?? payload.old) as Partial<DbMessage> | null
+            const currentConvId = activeConvIdRef.current
+            if (currentConvId && row?.conversation_id === currentConvId) {
+              refreshMessages(currentConvId)
+              fetch('/api/conversations/read', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ conversationId: currentConvId }),
+                keepalive: true,
+              }).catch(() => {})
+            }
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'crm_conversations', filter: `inbox_id=eq.${activeInboxId}` },
+          () => refreshConversationList(activeInboxId)
+        )
+        .subscribe((status) => {
+          // Dispara na conexão inicial e em toda reconexão automática — mesmo
+          // papel de "catch-up" que o es.onopen tinha no SSE antigo.
+          if (status === 'SUBSCRIBED') refreshConversationList(activeInboxId)
+        })
+    }
+    setup()
+
+    // Polling de segurança: garante atualização mesmo se o Realtime perder eventos.
+    const poll = setInterval(() => refreshConversationList(activeInboxId), 30_000)
+
+    return () => {
+      cancelled = true
+      if (channel) supabase.removeChannel(channel)
+      clearInterval(poll)
+    }
+  }, [activeInboxId, refreshConversationList, refreshMessages, supabase])
+
+  // ─── Presença via SSE (backend do CRM) ─────────────────────────────────────
+  // Fica de fora da migração pro Realtime por enquanto — só carrega o pulso
+  // efêmero de "contato digitando/gravando", que o webhook recebe da Evolution
+  // API e repassa. Sem catch-up/poll: presença é do instante, não faz sentido
+  // "recuperar" depois de uma reconexão.
   useEffect(() => {
     if (!activeInboxId) return
     const es = new EventSource(`/api/whatsapp/stream?inboxId=${activeInboxId}`)
 
-    // Reconexão automática: recarrega a lista para recuperar eventos perdidos
-    // durante a desconexão (SSE não faz replay; onopen dispara a cada reconect).
-    es.onopen = () => {
-      refreshConversationList(activeInboxId)
-    }
-
     es.onmessage = (e) => {
       let ev: InboxEvent
       try { ev = JSON.parse(e.data) } catch { return }
-
-      if (ev.type === 'presence') {
-        if (ev.conversationId !== activeConvIdRef.current) return
-        if (remotePresenceTimerRef.current) clearTimeout(remotePresenceTimerRef.current)
-        if (ev.presence === 'composing' || ev.presence === 'recording') {
-          setRemotePresence({ convId: ev.conversationId, presence: ev.presence })
-          // WhatsApp nem sempre avisa quando o contato para de digitar — expira sozinho
-          remotePresenceTimerRef.current = setTimeout(() => setRemotePresence(null), 8000)
-        } else {
-          setRemotePresence(null)
-        }
-        return // presença não recarrega conversas/mensagens
-      }
-
-      refreshConversationList(activeInboxId)
-
-      // Sempre recarrega a conversa aberta — o webhook pode ter encontrado uma
-      // conversa diferente via dedup "1 por contato", então não filtramos por
-      // ev.conversationId === activeConvId (isso causava mensagens sumindo).
-      const currentConvId = activeConvIdRef.current
-      if (currentConvId) {
-        refreshMessages(currentConvId)
-        // Marca como lida se o evento é para esta conversa (loadConversations já zerará o count localmente)
-        if (ev.conversationId === currentConvId) {
-          fetch('/api/conversations/read', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ conversationId: currentConvId }),
-            keepalive: true,
-          }).catch(() => {})
-        }
+      if (ev.conversationId !== activeConvIdRef.current) return
+      if (remotePresenceTimerRef.current) clearTimeout(remotePresenceTimerRef.current)
+      if (ev.presence === 'composing' || ev.presence === 'recording') {
+        setRemotePresence({ convId: ev.conversationId, presence: ev.presence })
+        // WhatsApp nem sempre avisa quando o contato para de digitar — expira sozinho
+        remotePresenceTimerRef.current = setTimeout(() => setRemotePresence(null), 8000)
+      } else {
+        setRemotePresence(null)
       }
     }
 
-    // Polling de segurança: garante atualização mesmo se o SSE perder eventos.
-    // Intervalo longo para não sobrecarregar — SSE é o caminho principal.
-    const poll = setInterval(() => refreshConversationList(activeInboxId), 30_000)
-
-    return () => { es.close(); clearInterval(poll) }
-  }, [activeInboxId, refreshConversationList, refreshMessages])
+    return () => { es.close() }
+  }, [activeInboxId])
 
   // ─── File picker ──────────────────────────────────────────────────────────
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {

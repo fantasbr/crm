@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { emitInboxEvent } from '@/lib/realtime-bus'
 
 export const runtime = 'nodejs'
 
@@ -163,7 +162,7 @@ export async function POST(req: NextRequest) {
     rowId = inserted.id
   }
 
-  emitInboxEvent({ type: 'message', inboxId: conv.inbox_id, conversationId })
+  // O INSERT acima já dispara postgres_changes pra quem estiver assinando o inbox
 
   // Evolution API espera apenas os dígitos, sem o sufixo @s.whatsapp.net
   const number = conv.wa_jid.split('@')[0].replace(/\D/g, '')
@@ -186,7 +185,6 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     console.error('[send] falha de rede ao chamar Evolution API:', endpoint, err)
     await supabase.from('crm_messages').update({ status: 'failed' }).eq('id', rowId)
-    emitInboxEvent({ type: 'message', inboxId: conv.inbox_id, conversationId })
     // Falha antes de qualquer resposta — pode não ter sido enviada de fato, retryable
     return NextResponse.json(
       { error: 'Não foi possível conectar à Evolution API', detail: String(err), retryable: true, messageId: rowId },
@@ -198,7 +196,6 @@ export async function POST(req: NextRequest) {
     const errBody = await sendRes.text()
     console.error('[send] Evolution API retornou erro', sendRes.status, '|', endpoint, '|', errBody)
     await supabase.from('crm_messages').update({ status: 'failed' }).eq('id', rowId)
-    emitInboxEvent({ type: 'message', inboxId: conv.inbox_id, conversationId })
     return NextResponse.json(
       { error: `Evolution API ${sendRes.status}`, detail: errBody, retryable: sendRes.status >= 500, messageId: rowId },
       { status: 502 }
@@ -219,8 +216,7 @@ export async function POST(req: NextRequest) {
     .update({ last_message: msgBody, last_message_at: now, unread_count: 0 })
     .eq('id', conversationId)
 
-  // Notifica clientes SSE conectados
-  emitInboxEvent({ type: 'message', inboxId: conv.inbox_id, conversationId })
+  // O UPDATE acima já dispara postgres_changes pra quem estiver assinando o inbox
 
   return NextResponse.json({ ok: true, messageId: rowId })
 }
