@@ -26,7 +26,7 @@ export default async function InboxPage({
   const conversationsRes = firstInboxId
     ? await supabase
         .from('crm_conversations')
-        .select('*, crm_contacts(id, name, phone, email, origin)')
+        .select('*, crm_contacts(id, name, phone, email, origin, wa_push_name, avatar_url)')
         .eq('inbox_id', firstInboxId)
         .eq('status', 'open')
         .order('last_message_at', { ascending: false })

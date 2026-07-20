@@ -59,7 +59,7 @@ type DbInbox = Database['public']['Tables']['crm_inboxes']['Row']
 type DbStage = Database['public']['Tables']['crm_stages']['Row']
 
 type DbConversation = Database['public']['Tables']['crm_conversations']['Row'] & {
-  crm_contacts: { id: string; name: string; phone: string; email: string | null; origin: string } | null
+  crm_contacts: { id: string; name: string; phone: string; email: string | null; origin: string; wa_push_name: string | null; avatar_url: string | null } | null
 }
 type DbMessage = Database['public']['Tables']['crm_messages']['Row']
 
@@ -182,7 +182,7 @@ export function InboxClient({
   const loadConversations = useCallback(async (inboxId: string) => {
     const { data } = await supabase
       .from('crm_conversations')
-      .select('*, crm_contacts(id, name, phone, email, origin)')
+      .select('*, crm_contacts(id, name, phone, email, origin, wa_push_name, avatar_url)')
       .eq('inbox_id', inboxId)
       .eq('status', statusFilterRef.current)
       .order('last_message_at', { ascending: false })
@@ -676,8 +676,13 @@ export function InboxClient({
                   )}
                 >
                   <div className="flex items-start gap-3">
-                    <div className="w-9 h-9 rounded-full bg-brand-100 flex items-center justify-center flex-shrink-0">
-                      <span className="text-xs font-bold text-brand-600">{name.charAt(0).toUpperCase()}</span>
+                    <div className="w-9 h-9 rounded-full bg-brand-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
+                      {contact?.avatar_url ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={contact.avatar_url} alt={name} className="w-full h-full object-cover" />
+                      ) : (
+                        <span className="text-xs font-bold text-brand-600">{name.charAt(0).toUpperCase()}</span>
+                      )}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between">
@@ -729,10 +734,15 @@ export function InboxClient({
             {/* Chat header */}
             <div className="px-5 py-3.5 border-b border-gray-200 bg-white flex items-center justify-between flex-shrink-0">
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-full bg-brand-100 flex items-center justify-center">
-                  <span className="text-sm font-bold text-brand-600">
-                    {(activeConv.crm_contacts?.name ?? activeConv.wa_jid).charAt(0).toUpperCase()}
-                  </span>
+                <div className="w-9 h-9 rounded-full bg-brand-100 flex items-center justify-center overflow-hidden flex-shrink-0">
+                  {activeConv.crm_contacts?.avatar_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={activeConv.crm_contacts.avatar_url} alt="" className="w-full h-full object-cover" />
+                  ) : (
+                    <span className="text-sm font-bold text-brand-600">
+                      {(activeConv.crm_contacts?.name ?? activeConv.wa_jid).charAt(0).toUpperCase()}
+                    </span>
+                  )}
                 </div>
                 <div>
                   <div className="flex items-center gap-1.5">
@@ -751,6 +761,9 @@ export function InboxClient({
                   </div>
                   {activeConv.crm_contacts?.phone && (
                     <p className="text-xs text-gray-500">{activeConv.crm_contacts.phone}</p>
+                  )}
+                  {activeConv.crm_contacts?.wa_push_name && activeConv.crm_contacts.wa_push_name !== activeConv.crm_contacts.name && (
+                    <p className="text-xs text-gray-400">Nome WhatsApp: {activeConv.crm_contacts.wa_push_name}</p>
                   )}
                 </div>
               </div>
@@ -1073,12 +1086,14 @@ export function InboxClient({
         contact={editContactOpen && activeConv?.crm_contacts ? activeConv.crm_contacts : null}
         onClose={() => setEditContactOpen(false)}
         onSaved={(updated) => {
+          // Não fecha o modal aqui: a sincronização de foto chama onSaved sem
+          // fechar (o usuário pode continuar editando); o próprio modal fecha
+          // sozinho após um salvamento de verdade (handleSave -> onClose).
           setConversations(prev => prev.map(c =>
             c.crm_contacts?.id === updated.id
-              ? { ...c, crm_contacts: { ...c.crm_contacts!, name: updated.name } }
+              ? { ...c, crm_contacts: { ...c.crm_contacts!, name: updated.name, avatar_url: updated.avatar_url ?? c.crm_contacts!.avatar_url } }
               : c
           ))
-          setEditContactOpen(false)
         }}
       />
     </div>

@@ -65,6 +65,8 @@ export interface Contact {
   email?: string
   origin: ContactOrigin
   chatwootId?: string
+  waPushName?: string | null
+  avatarUrl?: string | null
   createdAt: string
 }
 

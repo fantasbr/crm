@@ -36,7 +36,7 @@ export function ContactsTable({ contacts: initialContacts, deals }: ContactsTabl
     (c.email ?? '').toLowerCase().includes(search.toLowerCase())
   )
 
-  const handleContactSaved = (updated: { id: string; name: string; email: string | null; origin: string }) => {
+  const handleContactSaved = (updated: { id: string; name: string; email: string | null; origin: string; avatar_url?: string | null }) => {
     setContacts(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated, origin: updated.origin as Contact['origin'] } : c))
     router.refresh()
   }
@@ -91,12 +91,20 @@ export function ContactsTable({ contacts: initialContacts, deals }: ContactsTabl
                 <tr key={contact.id} className="hover:bg-gray-50 transition-colors">
                   <td className="px-5 py-4">
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 bg-brand-100 rounded-full flex items-center justify-center flex-shrink-0">
-                        <span className="text-xs font-bold text-brand-600">{contact.name.charAt(0)}</span>
+                      <div className="w-8 h-8 bg-brand-100 rounded-full flex items-center justify-center flex-shrink-0 overflow-hidden">
+                        {contact.avatar_url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={contact.avatar_url} alt={contact.name} className="w-full h-full object-cover" />
+                        ) : (
+                          <span className="text-xs font-bold text-brand-600">{contact.name.charAt(0)}</span>
+                        )}
                       </div>
                       <div>
                         <p className="text-sm font-medium text-gray-900">{contact.name}</p>
                         {contact.email && <p className="text-xs text-gray-500">{contact.email}</p>}
+                        {contact.wa_push_name && contact.wa_push_name !== contact.name && (
+                          <p className="text-xs text-gray-400">Nome WhatsApp: {contact.wa_push_name}</p>
+                        )}
                       </div>
                     </div>
                   </td>

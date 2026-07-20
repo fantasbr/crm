@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { maybeRouteToAI } from '@/lib/ai-agent'
 import { emitInboxEvent } from '@/lib/realtime-bus'
+import { fetchWhatsAppAvatarUrl } from '@/lib/evolution'
 
 export const runtime = 'nodejs'
 
@@ -148,12 +149,12 @@ export async function POST(req: NextRequest) {
       const contactName = !fromMe ? (pushName ?? waPhone) : waPhone
 
       let contactId: string | null = null
-      let existingContact: { id: string; name: string } | null = null
+      let existingContact: { id: string; name: string; wa_push_name: string | null } | null = null
 
       // 1. Busca por wa_phone (contato já vinculado ao WhatsApp)
       const { data: byWaPhone } = await supabase
         .from('crm_contacts')
-        .select('id, name')
+        .select('id, name, wa_push_name')
         .eq('wa_phone', waPhone)
         .maybeSingle()
 
@@ -163,7 +164,7 @@ export async function POST(req: NextRequest) {
         // 2. Fallback: contato cadastrado manualmente com mesmo phone mas sem wa_phone
         const { data: byPhone } = await supabase
           .from('crm_contacts')
-          .select('id, name')
+          .select('id, name, wa_push_name')
           .eq('phone', waPhone)
           .is('wa_phone', null)
           .maybeSingle()
@@ -179,20 +180,45 @@ export async function POST(req: NextRequest) {
 
       if (existingContact) {
         contactId = existingContact.id
+        const contactUpdates: { name?: string; wa_push_name?: string } = {}
         // Corrige nome placeholder (= telefone) se agora temos o nome real via inbound
         if (!fromMe && pushName && existingContact.name === waPhone) {
-          await supabase
-            .from('crm_contacts')
-            .update({ name: pushName })
-            .eq('id', contactId)
+          contactUpdates.name = pushName
+        }
+        // wa_push_name sempre reflete o nome mais recente reportado pelo WhatsApp,
+        // independente do `name` — que é o campo editável pelo usuário no CRM
+        if (!fromMe && pushName && pushName !== existingContact.wa_push_name) {
+          contactUpdates.wa_push_name = pushName
+        }
+        if (Object.keys(contactUpdates).length > 0) {
+          await supabase.from('crm_contacts').update(contactUpdates).eq('id', contactId)
         }
       } else {
         const { data: newContact } = await supabase
           .from('crm_contacts')
-          .insert({ wa_phone: waPhone, name: contactName, phone: waPhone, origin: 'whatsapp' })
+          .insert({
+            wa_phone: waPhone,
+            name: contactName,
+            wa_push_name: !fromMe ? (pushName ?? null) : null,
+            phone: waPhone,
+            origin: 'whatsapp',
+          })
           .select('id')
           .single()
-        if (newContact) contactId = newContact.id
+        if (newContact) {
+          contactId = newContact.id
+          // Contato novo: busca a foto de perfil uma vez (não derruba o webhook se falhar)
+          try {
+            const avatarUrl = await fetchWhatsAppAvatarUrl(instanceName, waPhone)
+            if (avatarUrl) {
+              await supabase.from('crm_contacts')
+                .update({ avatar_url: avatarUrl, avatar_synced_at: new Date().toISOString() })
+                .eq('id', newContact.id)
+            }
+          } catch (err) {
+            console.warn('[webhook] falha ao sincronizar foto de perfil:', waPhone, err)
+          }
+        }
       }
 
       // 1 conversa por contato: busca pela conversa mais recente do contato
@@ -342,19 +368,36 @@ export async function POST(req: NextRequest) {
       if (pushName) {
         const { data: existing } = await supabase
           .from('crm_contacts')
-          .select('id, name')
+          .select('id, name, wa_push_name')
           .eq('wa_phone', waPhone)
           .maybeSingle()
         if (!existing) {
-          await supabase
+          const { data: newContact } = await supabase
             .from('crm_contacts')
-            .insert({ wa_phone: waPhone, name: pushName, phone: waPhone, origin: 'whatsapp' })
-        } else if (existing.name === waPhone) {
+            .insert({ wa_phone: waPhone, name: pushName, wa_push_name: pushName, phone: waPhone, origin: 'whatsapp' })
+            .select('id')
+            .single()
+          if (newContact) {
+            try {
+              const avatarUrl = await fetchWhatsAppAvatarUrl(instanceName, waPhone)
+              if (avatarUrl) {
+                await supabase.from('crm_contacts')
+                  .update({ avatar_url: avatarUrl, avatar_synced_at: new Date().toISOString() })
+                  .eq('id', newContact.id)
+              }
+            } catch (err) {
+              console.warn('[webhook] falha ao sincronizar foto de perfil:', waPhone, err)
+            }
+          }
+        } else {
+          const contactUpdates: { name?: string; wa_push_name?: string } = {}
           // Nome era placeholder; atualiza para o nome real
-          await supabase
-            .from('crm_contacts')
-            .update({ name: pushName })
-            .eq('id', existing.id)
+          if (existing.name === waPhone) contactUpdates.name = pushName
+          // wa_push_name sempre reflete o nome mais recente reportado pelo WhatsApp
+          if (pushName !== existing.wa_push_name) contactUpdates.wa_push_name = pushName
+          if (Object.keys(contactUpdates).length > 0) {
+            await supabase.from('crm_contacts').update(contactUpdates).eq('id', existing.id)
+          }
         }
       }
     }

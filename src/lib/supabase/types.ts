@@ -78,9 +78,9 @@ export type Database = {
         ]
       }
       crm_contacts: {
-        Row: { id: string; name: string; phone: string; email: string | null; origin: 'whatsapp' | 'presencial' | 'indicacao' | 'site'; chatwoot_id: string | null; wa_phone: string | null; created_at: string; updated_at: string }
-        Insert: { id?: string; name: string; phone: string; email?: string | null; origin?: 'whatsapp' | 'presencial' | 'indicacao' | 'site'; chatwoot_id?: string | null; wa_phone?: string | null; created_at?: string; updated_at?: string }
-        Update: { id?: string; name?: string; phone?: string; email?: string | null; origin?: 'whatsapp' | 'presencial' | 'indicacao' | 'site'; chatwoot_id?: string | null; wa_phone?: string | null; updated_at?: string }
+        Row: { id: string; name: string; phone: string; email: string | null; origin: 'whatsapp' | 'presencial' | 'indicacao' | 'site'; chatwoot_id: string | null; wa_phone: string | null; wa_push_name: string | null; avatar_url: string | null; avatar_synced_at: string | null; created_at: string; updated_at: string }
+        Insert: { id?: string; name: string; phone: string; email?: string | null; origin?: 'whatsapp' | 'presencial' | 'indicacao' | 'site'; chatwoot_id?: string | null; wa_phone?: string | null; wa_push_name?: string | null; avatar_url?: string | null; avatar_synced_at?: string | null; created_at?: string; updated_at?: string }
+        Update: { id?: string; name?: string; phone?: string; email?: string | null; origin?: 'whatsapp' | 'presencial' | 'indicacao' | 'site'; chatwoot_id?: string | null; wa_phone?: string | null; wa_push_name?: string | null; avatar_url?: string | null; avatar_synced_at?: string | null; updated_at?: string }
         Relationships: []
       }
       crm_deals: {
