@@ -7,7 +7,7 @@ version: "3.8"
 
 services:
   crm_app:
-    image: angelomoreirafilho/crm:v1.2.17
+    image: angelomoreirafilho/crm:v1.2.18
 
     networks:
       - BrancaNet
@@ -23,6 +23,15 @@ services:
       - EVOLUTION_API_KEY=${EVOLUTION_API_KEY}
       - EVOLUTION_WEBHOOK_TOKEN=${EVOLUTION_WEBHOOK_TOKEN}
       - AI_AGENT_ENABLED=${AI_AGENT_ENABLED:-false}
+      # MinIO (mídia da Evolution) — endpoint interno do Swarm. Só as credenciais
+      # precisam vir do ambiente; o resto tem default pro setup atual.
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio}
+      - MINIO_PORT=${MINIO_PORT:-9000}
+      - MINIO_USE_SSL=${MINIO_USE_SSL:-false}
+      - MINIO_REGION=${MINIO_REGION:-eu-south}
+      - MINIO_BUCKET=${MINIO_BUCKET:-evolution-storage}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
 
     deploy:
       mode: replicated
