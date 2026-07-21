@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { Readable } from 'node:stream'
 import { createClient } from '@/lib/supabase/server'
 import { createServiceClient } from '@/lib/supabase/service'
+import { getMinioClient, parseMinioObject } from '@/lib/minio'
 
 export const runtime = 'nodejs'
 
@@ -21,27 +23,59 @@ export async function GET(req: NextRequest) {
 
   if (!msgAuth) return new Response('Not found', { status: 404 })
 
-  // Caminho rápido: MinIO URL já disponível — proxy direto, sem chamar a Evolution API
-  // Se falhar (URL pre-signed expirada após 7 dias), cai no fallback da Evolution API
+  // Caminho rápido: mídia no MinIO. Com credenciais, busca o objeto autenticado
+  // pelo bucket+key (permanentes) — imune à expiração da URL pré-assinada, que
+  // no S3/SigV4 dura no máx. 7 dias. Sem credenciais, cai no comportamento
+  // legado de dar fetch na própria URL assinada (funciona enquanto fresca).
   if (msgAuth.media_url) {
-    let minioRes: Response | null = null
-    try {
-      minioRes = await fetch(msgAuth.media_url)
-    } catch (err) {
-      console.warn('[media] falha ao buscar do MinIO, tentando fallback:', err)
-    }
-    if (minioRes?.ok) {
-      const mimetype = msgAuth.media_type ?? minioRes.headers.get('Content-Type') ?? 'application/octet-stream'
-      return new Response(minioRes.body, {
-        headers: {
-          'Content-Type': mimetype,
-          'Cache-Control': 'private, max-age=86400',
-          'Content-Length': minioRes.headers.get('Content-Length') ?? '',
-        },
-      })
-    }
-    if (minioRes) {
-      console.warn('[media] MinIO retornou', minioRes.status, '— tentando Evolution API fallback')
+    const minio = getMinioClient()
+    const parsed = parseMinioObject(msgAuth.media_url)
+
+    if (minio && parsed) {
+      try {
+        const stat = await minio.statObject(parsed.bucket, parsed.objectName)
+        const stream = await minio.getObject(parsed.bucket, parsed.objectName)
+        const mimetype = msgAuth.media_type
+          ?? (stat.metaData?.['content-type'] as string | undefined)
+          ?? 'application/octet-stream'
+        return new Response(Readable.toWeb(stream) as unknown as ReadableStream, {
+          headers: {
+            'Content-Type': mimetype,
+            'Cache-Control': 'private, max-age=86400',
+            'Content-Length': String(stat.size),
+          },
+        })
+      } catch (err) {
+        const code = (err as { code?: string }).code
+        // NoSuchKey/NotFound = objeto realmente sumiu do bucket → tenta Evolution.
+        // Outros erros (rede/credencial) também caem no fallback, mas logados diferente.
+        if (code === 'NoSuchKey' || code === 'NotFound') {
+          console.warn('[media] objeto não existe mais no MinIO, tentando Evolution fallback:', parsed.objectName)
+        } else {
+          console.warn('[media] erro ao buscar do MinIO, tentando fallback:', err)
+        }
+      }
+    } else {
+      // MinIO não configurado ou URL fora do padrão path-style — usa a URL assinada
+      let minioRes: Response | null = null
+      try {
+        minioRes = await fetch(msgAuth.media_url)
+      } catch (err) {
+        console.warn('[media] falha ao buscar do MinIO, tentando fallback:', err)
+      }
+      if (minioRes?.ok) {
+        const mimetype = msgAuth.media_type ?? minioRes.headers.get('Content-Type') ?? 'application/octet-stream'
+        return new Response(minioRes.body, {
+          headers: {
+            'Content-Type': mimetype,
+            'Cache-Control': 'private, max-age=86400',
+            'Content-Length': minioRes.headers.get('Content-Length') ?? '',
+          },
+        })
+      }
+      if (minioRes) {
+        console.warn('[media] MinIO retornou', minioRes.status, '— tentando Evolution API fallback')
+      }
     }
   }
 
