@@ -142,7 +142,6 @@ export function InboxClient({
   const [editContactOpen, setEditContactOpen] = useState(false)
   const [activeDeal, setActiveDeal] = useState<Deal | null>(null)
   const [dealPanelOpen, setDealPanelOpen] = useState(false)
-  const [mounted, setMounted] = useState(false)
   const [pendingFile, setPendingFile] = useState<{ base64: string; type: string; name: string; preview?: string } | null>(null)
   const [recording, setRecording] = useState(false)
   const [recordSeconds, setRecordSeconds] = useState(0)
@@ -168,7 +167,10 @@ export function InboxClient({
   const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const activeConvIdRef2 = useRef(activeConvId)
   // Cache base64 de mídias enviadas pelo CRM (outbound, sem metadata no banco)
-  const mediaCacheRef = useRef<Map<string, string>>(new Map())
+  // Cache local de base64 da mídia enviada pelo CRM (pra renderizar/retry sem
+  // depender do MinIO). É estado, não ref, porque é lido no render — assim a
+  // gravação re-renderiza e a leitura durante o render é legítima.
+  const [mediaCache, setMediaCache] = useState<Map<string, string>>(new Map())
   const statusFilterRef = useRef<'open' | 'resolved'>('open')
   const searchRef = useRef('')
   const conversationListRef = useRef<HTMLDivElement>(null)
@@ -182,7 +184,6 @@ export function InboxClient({
   const activeInbox = inboxes.find(i => i.id === activeInboxId) ?? null
 
   useEffect(() => {
-    setMounted(true)
     return () => {
       // Garante que microfone e timer são liberados ao desmontar
       if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop()
@@ -401,6 +402,9 @@ export function InboxClient({
     if (initialPhone && conversations.length > 0) {
       const normalized = initialPhone.replace(/\D/g, '')
       const found = conversations.find(c => c.wa_jid.includes(normalized))
+      // Seleção derivada de dados carregados de forma assíncrona (a lista de
+      // conversas chega depois do mount) — caso legítimo de setState em efeito.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       if (found) setActiveConvId(found.id)
     }
   }, [initialPhone, conversations])
@@ -420,6 +424,9 @@ export function InboxClient({
   // ─── Load messages when conversation changes ──────────────────────────────
   useEffect(() => {
     if (!activeConvId) return
+    // Reset de UI + disparo do fetch ao trocar de conversa — ciclo padrão de
+    // efeito de carregamento (loading→loaded), setState síncrono é esperado aqui.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoadingMsgs(true)
     setHasMoreOlder(true)
     justOpenedRef.current = true
@@ -452,6 +459,9 @@ export function InboxClient({
   // ─── Busca o deal ativo do contato da conversa selecionada ───────────────
   useEffect(() => {
     const contactId = activeConv?.crm_contacts?.id
+    // Limpa o deal ao trocar pra uma conversa sem contato antes do fetch abaixo —
+    // efeito de data-fetch keyed em contactId, setState síncrono é o esperado.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (!contactId) { setActiveDeal(null); return }
     supabase
       .from('crm_deals')
@@ -745,8 +755,11 @@ export function InboxClient({
 
     const result = await postSend(payload)
     if (hasMedia && snapshotFile && result.messageId) {
-      // Cache local pra renderizar a mídia (e permitir retry) sem depender do MinIO
-      mediaCacheRef.current.set(result.messageId, snapshotFile.base64)
+      // Cache local pra renderizar a mídia (e permitir retry) sem depender do MinIO.
+      // Consts locais: a narrowing de result.messageId não sobrevive à closure.
+      const mid = result.messageId
+      const b64 = snapshotFile.base64
+      setMediaCache(prev => new Map(prev).set(mid, b64))
     }
     if (!result.ok) {
       setSendError(result.error ?? 'Falha ao enviar')
@@ -766,7 +779,7 @@ export function InboxClient({
     if (!activeConvId) return
     const clientRef = msg.client_ref ?? crypto.randomUUID()
     const isMediaMsg = !!msg.media_type
-    const cachedBase64 = mediaCacheRef.current.get(msg.id)
+    const cachedBase64 = mediaCache.get(msg.id)
     if (isMediaMsg && !cachedBase64) {
       setSendError('Não é possível reenviar essa mídia — recarregue a página e envie de novo.')
       return
@@ -929,8 +942,8 @@ export function InboxClient({
                         <span className={cn('text-sm truncate', isActive ? 'font-semibold text-brand-700' : 'font-medium text-gray-900')}>
                           {name}
                         </span>
-                        <span className="text-[11px] text-gray-400 flex-shrink-0 ml-1">
-                          {mounted ? formatTime(conv.last_message_at) : ''}
+                        <span className="text-[11px] text-gray-400 flex-shrink-0 ml-1" suppressHydrationWarning>
+                          {formatTime(conv.last_message_at)}
                         </span>
                       </div>
                       <div className="flex items-center justify-between mt-0.5">
@@ -1084,7 +1097,7 @@ export function InboxClient({
                 const mt = msg.media_type
                 const hasMedia = !!mt
                 // Cache local: mídia enviada pelo CRM (sent_by preenchido, sem metadata no banco)
-                const cachedBase64 = mediaCacheRef.current.get(msg.id)
+                const cachedBase64 = mediaCache.get(msg.id)
                 // Renderiza mídia se: inbound, outbound Evolution (sent_by null), ou outbound CRM com cache
                 const canRenderMedia = !isDeleted && hasMedia && (
                   msg.direction === 'inbound' || msg.sent_by === null || !!cachedBase64
@@ -1101,8 +1114,8 @@ export function InboxClient({
                   <Fragment key={msg.id}>
                     {showDateSeparator && (
                       <div className="flex justify-center py-1">
-                        <span className="px-3 py-1 bg-gray-200 text-gray-600 text-[11px] font-medium rounded-full">
-                          {mounted ? formatDateSeparator(msg.created_at) : ''}
+                        <span className="px-3 py-1 bg-gray-200 text-gray-600 text-[11px] font-medium rounded-full" suppressHydrationWarning>
+                          {formatDateSeparator(msg.created_at)}
                         </span>
                       </div>
                     )}
@@ -1176,7 +1189,7 @@ export function InboxClient({
                         {msg.edited_at && !isDeleted && (
                           <span className="text-[10px] italic opacity-70" title={msg.original_body ?? undefined}>editado</span>
                         )}
-                        <span className="text-[10px]">{mounted ? formatMsgTime(msg.created_at) : ''}</span>
+                        <span className="text-[10px]" suppressHydrationWarning>{formatMsgTime(msg.created_at)}</span>
                         {isOut && (
                           msg.status === 'read' ? (
                             <CheckCheck className="w-3 h-3 text-blue-300" />
