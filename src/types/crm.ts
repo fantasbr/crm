@@ -93,6 +93,8 @@ export interface Deal {
   status: DealStatus
   createdAt: string
   updatedAt: string
+  // Nº de mensagens não-lidas da conversa do contato (preenchido na pipeline)
+  unreadCount?: number
 }
 
 export interface Inbox {

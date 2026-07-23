@@ -81,7 +81,7 @@ export default function PipelinePage() {
 
   const loadDeals = useCallback(async (pipelineId: string) => {
     setLoading(true)
-    const [stagesRes, dealsRes] = await Promise.all([
+    const [stagesRes, dealsRes, unreadRes] = await Promise.all([
       supabase.from('crm_stages').select('*').eq('pipeline_id', pipelineId).order('order'),
       supabase.from('crm_deals').select(`
         *, crm_contacts(*),
@@ -89,13 +89,24 @@ export default function PipelinePage() {
         crm_service_plans(id, name, table_price, max_discount_pct),
         assigned_user:crm_users!crm_deals_assigned_to_fkey(id, name, role)
       `).eq('pipeline_id', pipelineId).eq('status', 'open').order('created_at', { ascending: false }),
+      // Não-lidas por contato (só conversas abertas com unread > 0)
+      supabase.from('crm_conversations').select('contact_id, unread_count').eq('status', 'open').gt('unread_count', 0),
     ])
+    const unreadByContact: Record<string, number> = {}
+    for (const c of (unreadRes.data ?? []) as { contact_id: string | null; unread_count: number }[]) {
+      if (c.contact_id) unreadByContact[c.contact_id] = (unreadByContact[c.contact_id] ?? 0) + (c.unread_count ?? 0)
+    }
     setStages(stagesRes.data ?? [])
-    setDeals((dealsRes.data ?? []).map(d => dbDealToDeal(d as Record<string, unknown>)))
+    setDeals((dealsRes.data ?? []).map(d => {
+      const deal = dbDealToDeal(d as Record<string, unknown>)
+      return { ...deal, unreadCount: unreadByContact[deal.contactId] ?? 0 }
+    }))
     setLoading(false)
   }, [])
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { loadPipelines() }, [loadPipelines])
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { if (selectedId) loadDeals(selectedId) }, [selectedId, loadDeals])
 
   const columns = stages

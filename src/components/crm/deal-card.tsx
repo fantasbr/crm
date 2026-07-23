@@ -31,6 +31,14 @@ export function DealCard({ deal, onUpdated }: DealCardProps) {
               </span>
             </div>
             <p className="text-sm font-semibold text-gray-900 truncate">{deal.contact.name}</p>
+            {!!deal.unreadCount && deal.unreadCount > 0 && (
+              <span
+                title={`${deal.unreadCount} mensagem(ns) não lida(s)`}
+                className="flex-shrink-0 min-w-[18px] h-[18px] px-1 inline-flex items-center justify-center rounded-full bg-green-600 text-white text-[11px] font-semibold leading-none"
+              >
+                {deal.unreadCount}
+              </span>
+            )}
           </div>
           <span className={cn(
             'text-xs font-medium px-2 py-0.5 rounded-full flex-shrink-0',
