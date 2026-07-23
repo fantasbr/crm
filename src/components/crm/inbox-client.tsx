@@ -65,12 +65,16 @@ type DbConversation = Database['public']['Tables']['crm_conversations']['Row'] &
 }
 type DbMessage = Database['public']['Tables']['crm_messages']['Row']
 
+type ComposeContact = { id: string; name: string; phone: string; wa_phone: string | null; avatar_url: string | null }
+
 interface InboxClientProps {
   inboxes: DbInbox[]
   initialConversations: DbConversation[]
   initialInboxId: string | null
   initialConvId: string | null
   initialPhone: string | null
+  initialContactId: string | null
+  initialContact: ComposeContact | null
   pipelineId: string | null
   stages: DbStage[]
 }
@@ -118,10 +122,20 @@ export function InboxClient({
   initialInboxId,
   initialConvId,
   initialPhone,
+  initialContactId,
+  initialContact,
   pipelineId,
   stages,
 }: InboxClientProps) {
   const supabase = useMemo(() => createClient(), [])
+
+  // Modo "primeira mensagem": contato sem conversa (veio de ?contact= e o SSR
+  // não achou conversa → initialConvId nulo). Fica ativo até criar a conversa.
+  const composeContact = (initialContactId && !initialConvId) ? initialContact : null
+  const [composeMode, setComposeMode] = useState(!!composeContact)
+  // Inbox escolhido pra enviar a primeira mensagem (só relevante com 2+ inboxes)
+  const [composeInboxId, setComposeInboxId] = useState(initialInboxId ?? '')
+  const [startingConv, setStartingConv] = useState(false)
 
   const [activeInboxId, setActiveInboxId] = useState(initialInboxId ?? '')
   const [conversations, setConversations] = useState<DbConversation[]>(initialConversations)
@@ -147,6 +161,9 @@ export function InboxClient({
   const [recordSeconds, setRecordSeconds] = useState(0)
   // Presença do contato (digitando/gravando) recebida via SSE — efêmera, nunca persistida
   const [remotePresence, setRemotePresence] = useState<{ convId: string; presence: string } | null>(null)
+  // Nº de conversas não-lidas por inbox — alimenta o badge nas abas. Cobre o
+  // inbox inativo (que não recebe Realtime) via o poll de 30s.
+  const [unreadByInbox, setUnreadByInbox] = useState<Record<string, number>>({})
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   // Effects sempre disparam uma vez no mount, mesmo sem mudança "real" de
@@ -310,6 +327,21 @@ export function InboxClient({
     }
   }, [loadConversations, searchConversations])
 
+  // Contagem de conversas não-lidas por inbox (query leve: só as com unread > 0).
+  // Agrega no client. Roda junto do refresh do inbox ativo e no poll de 30s.
+  const refreshUnreadCounts = useCallback(async () => {
+    const { data } = await supabase
+      .from('crm_conversations')
+      .select('inbox_id')
+      .eq('status', 'open')
+      .gt('unread_count', 0)
+    const counts: Record<string, number> = {}
+    for (const row of (data ?? []) as { inbox_id: string }[]) {
+      counts[row.inbox_id] = (counts[row.inbox_id] ?? 0) + 1
+    }
+    setUnreadByInbox(counts)
+  }, [supabase])
+
   // ─── Load messages for a conversation ─────────────────────────────────────
   // Busca as MAIS RECENTES (desc + limit) e reverte para ordem cronológica —
   // buscar com `ascending: true` + limit trazia as mais antigas e as mensagens
@@ -321,6 +353,10 @@ export function InboxClient({
       .eq('conversation_id', convId)
       .order('created_at', { ascending: false })
       .limit(MESSAGES_PAGE_SIZE)
+    // Trava anti-corrida: se a conversa ativa mudou durante o await (clique
+    // rápido entre conversas), descarta este resultado pra não sobrescrever as
+    // mensagens da conversa atual com as de uma anterior (a mais lenta ganharia).
+    if (activeConvIdRef.current !== convId) return
     const recent = (data ?? []).slice().reverse()
     setMessages(recent)
     setHasMoreOlder(recent.length === MESSAGES_PAGE_SIZE)
@@ -398,14 +434,21 @@ export function InboxClient({
   }, [activeInboxId, statusFilter, search, loadConversations, searchConversations])
 
   // ─── Auto-select from URL params ─────────────────────────────────────────
+  // Aplica UMA vez: o efeito depende de `conversations` (pra achar a conversa
+  // quando a lista assíncrona chega), mas sem o guard ele re-disparava a cada
+  // refresh (Realtime/poll) e forçava a seleção de volta pro contato do
+  // deep-link, brigando com a conversa que o usuário abriu manualmente.
+  const initialPhoneAppliedRef = useRef(false)
   useEffect(() => {
+    if (initialPhoneAppliedRef.current) return
     if (initialPhone && conversations.length > 0) {
       const normalized = initialPhone.replace(/\D/g, '')
       const found = conversations.find(c => c.wa_jid.includes(normalized))
-      // Seleção derivada de dados carregados de forma assíncrona (a lista de
-      // conversas chega depois do mount) — caso legítimo de setState em efeito.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      if (found) setActiveConvId(found.id)
+      if (found) {
+        initialPhoneAppliedRef.current = true
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setActiveConvId(found.id)
+      }
     }
   }, [initialPhone, conversations])
 
@@ -566,7 +609,7 @@ export function InboxClient({
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'crm_conversations', filter: `inbox_id=eq.${activeInboxId}` },
-          () => refreshConversationList(activeInboxId)
+          () => { refreshConversationList(activeInboxId); refreshUnreadCounts() }
         )
         .subscribe((status) => {
           // Dispara na conexão inicial e em toda reconexão automática — mesmo
@@ -584,7 +627,20 @@ export function InboxClient({
       if (channel) supabase.removeChannel(channel)
       clearInterval(poll)
     }
-  }, [activeInboxId, refreshConversationList, refreshMessages, supabase])
+  }, [activeInboxId, refreshConversationList, refreshMessages, refreshUnreadCounts, supabase])
+
+  // ─── Badge de não-lidas por aba ─────────────────────────────────────────────
+  // Efeito próprio (independente do inbox ativo) pra cobrir também o inbox
+  // inativo, que não recebe Realtime. O ativo ainda atualiza ao vivo pelos
+  // handlers do Realtime acima.
+  useEffect(() => {
+    // Fetch on mount + poll de 30s (efeito idiomático de data-fetch); o
+    // setState acontece após o await dentro de refreshUnreadCounts, não síncrono.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    refreshUnreadCounts()
+    const t = setInterval(refreshUnreadCounts, 30_000)
+    return () => clearInterval(t)
+  }, [refreshUnreadCounts])
 
   // ─── Presença via SSE (backend do CRM) ─────────────────────────────────────
   // Fica de fora da migração pro Realtime por enquanto — só carrega o pulso
@@ -728,7 +784,41 @@ export function InboxClient({
   const handleSend = async () => {
     const hasText = text.trim().length > 0
     const hasMedia = !!pendingFile
-    if ((!hasText && !hasMedia) || !activeConvId || sending) return
+    if ((!hasText && !hasMedia) || sending || startingConv) return
+
+    // Modo compose (primeira mensagem): cria/reaproveita a conversa no inbox
+    // escolhido ANTES de enviar. Fora do compose, precisa de uma conversa aberta.
+    let targetConvId = activeConvId
+    if (composeMode && composeContact) {
+      if (!composeInboxId) { setSendError('Selecione um inbox'); return }
+      setStartingConv(true)
+      setSendError(null)
+      try {
+        const res = await fetch('/api/whatsapp/conversations/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ inboxId: composeInboxId, contactId: composeContact.id }),
+        })
+        const j = await res.json().catch(() => ({})) as { conversationId?: string; error?: string }
+        if (!res.ok || !j.conversationId) {
+          setSendError(j.error ?? 'Falha ao iniciar conversa')
+          setStartingConv(false)
+          return
+        }
+        targetConvId = j.conversationId
+        setActiveInboxId(composeInboxId)
+        setActiveConvId(j.conversationId)
+        setComposeMode(false)
+        await refreshConversationList(composeInboxId)
+      } catch {
+        setSendError('Falha ao iniciar conversa')
+        setStartingConv(false)
+        return
+      }
+      setStartingConv(false)
+    }
+
+    if (!targetConvId) return
     if (presencePauseTimerRef.current) clearTimeout(presencePauseTimerRef.current)
     sendPresenceUpdate('paused')
     setSending(true)
@@ -737,14 +827,14 @@ export function InboxClient({
     const clientRef = crypto.randomUUID()
     const payload = hasMedia
       ? {
-          conversationId: activeConvId,
+          conversationId: targetConvId,
           mediaBase64: pendingFile.base64,
           mediaType: pendingFile.type,
           fileName: pendingFile.name,
           caption: text.trim() || undefined,
           clientRef,
         }
-      : { conversationId: activeConvId, text: text.trim(), clientRef }
+      : { conversationId: targetConvId, text: text.trim(), clientRef }
 
     // Captura antes de limpar — a mensagem falha vira uma bolha "failed" com
     // retry próprio na conversa, então não restauramos mais o texto/mídia no
@@ -765,8 +855,8 @@ export function InboxClient({
       setSendError(result.error ?? 'Falha ao enviar')
       console.error('Send failed', result.error)
     }
-    // Usa ref para pegar o convId atual (pode ter mudado durante o await)
-    const convIdNow = activeConvIdRef2.current
+    // Usa o convId alvo (compose) ou o ref atual (pode ter mudado durante o await)
+    const convIdNow = targetConvId ?? activeConvIdRef2.current
     if (convIdNow) refreshMessages(convIdNow)
     setSending(false)
   }
@@ -837,7 +927,7 @@ export function InboxClient({
         {inboxes.map(inbox => (
           <button
             key={inbox.id}
-            onClick={() => { setActiveInboxId(inbox.id); setActiveConvId(null) }}
+            onClick={() => { setActiveInboxId(inbox.id); setActiveConvId(null); setComposeMode(false) }}
             className={cn(
               'flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-t-lg border-b-2 transition-colors whitespace-nowrap',
               activeInboxId === inbox.id
@@ -852,6 +942,11 @@ export function InboxClient({
             />
             {inbox.name}
             {inbox.phone && <span className="text-xs text-gray-400 font-normal">{inbox.phone}</span>}
+            {unreadByInbox[inbox.id] > 0 && (
+              <span className="ml-0.5 min-w-[18px] h-[18px] px-1 inline-flex items-center justify-center rounded-full bg-green-600 text-white text-[11px] font-semibold leading-none">
+                {unreadByInbox[inbox.id]}
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -982,9 +1077,81 @@ export function InboxClient({
 
         {/* Chat panel */}
         {!activeConv ? (
-          <div className="flex-1 flex items-center justify-center text-gray-400 text-sm bg-gray-50">
-            Selecione uma conversa
-          </div>
+          composeMode && composeContact ? (
+            <div className="flex-1 flex flex-col overflow-hidden bg-gray-50">
+              {/* Header do contato */}
+              <div className="px-5 py-3.5 border-b border-gray-200 bg-white flex items-center gap-3 flex-shrink-0">
+                <div className="w-9 h-9 rounded-full bg-brand-100 flex items-center justify-center overflow-hidden flex-shrink-0">
+                  {composeContact.avatar_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={composeContact.avatar_url} alt="" className="w-full h-full object-cover" />
+                  ) : (
+                    <span className="text-brand-700 font-semibold text-sm">{composeContact.name.charAt(0).toUpperCase()}</span>
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <p className="font-semibold text-gray-900 text-sm truncate">{composeContact.name}</p>
+                  <p className="text-xs text-gray-500">{composeContact.phone}</p>
+                </div>
+              </div>
+
+              {/* Aviso + seletor de inbox */}
+              <div className="flex-1 flex flex-col items-center justify-center gap-4 p-6 text-center">
+                <p className="text-gray-500 text-sm max-w-xs">
+                  Nenhuma conversa com este contato ainda. {inboxes.length > 1 ? 'Escolha o número e envie' : 'Envie'} a primeira mensagem.
+                </p>
+                {inboxes.length > 1 && (
+                  <div className="flex flex-col items-center gap-2">
+                    <span className="text-[11px] text-gray-400 uppercase tracking-wide">Enviar de</span>
+                    <div className="flex flex-wrap items-center justify-center gap-2">
+                      {inboxes.map(inbox => (
+                        <button
+                          key={inbox.id}
+                          onClick={() => setComposeInboxId(inbox.id)}
+                          className={cn(
+                            'flex items-center gap-2 px-3 py-1.5 rounded-full border text-sm transition-colors',
+                            composeInboxId === inbox.id
+                              ? 'border-brand-400 bg-brand-50 text-gray-900'
+                              : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                          )}
+                        >
+                          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: inbox.color }} />
+                          {inbox.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Input de envio */}
+              <div className="px-4 py-3 border-t border-gray-200 bg-white flex-shrink-0">
+                {sendError && <div className="mb-2 text-xs text-red-500">{sendError}</div>}
+                <div className="flex items-end gap-2">
+                  <textarea
+                    value={text}
+                    onChange={e => setText(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }}
+                    placeholder="Mensagem..."
+                    rows={1}
+                    className="flex-1 resize-none rounded-2xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:border-brand-300"
+                  />
+                  <button
+                    onClick={handleSend}
+                    disabled={startingConv || sending || !text.trim() || !composeInboxId}
+                    className="p-2.5 rounded-full bg-brand-500 text-white disabled:opacity-40 hover:bg-brand-600 transition-colors flex-shrink-0"
+                    title="Enviar"
+                  >
+                    <Send className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="flex-1 flex items-center justify-center text-gray-400 text-sm bg-gray-50">
+              Selecione uma conversa
+            </div>
+          )
         ) : (
           <div className="flex-1 flex flex-col overflow-hidden">
             {/* Chat header */}

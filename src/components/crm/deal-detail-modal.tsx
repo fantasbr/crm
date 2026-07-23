@@ -211,7 +211,7 @@ export function DealDetailModal({ deal, open, onClose, onUpdated, onBudget, vari
                   ver no inbox
                 </a>
               ) : (
-                <a href={`/inbox?phone=${deal.contact.phone.replace(/\D/g, '')}`}
+                <a href={`/inbox?contact=${deal.contact.id}&phone=${deal.contact.phone.replace(/\D/g, '')}`}
                   className="ml-1 text-xs text-green-600 hover:text-green-700 font-medium">
                   inbox
                 </a>

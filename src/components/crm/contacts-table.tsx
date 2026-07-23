@@ -145,13 +145,17 @@ export function ContactsTable({ contacts: initialContacts, deals }: ContactsTabl
                   </td>
                   <td className="px-5 py-4">
                     <div className="flex items-center gap-2">
-                      <Link
-                        href={`/inbox?phone=${contact.phone.replace(/\D/g, '')}`}
+                      {/* <a> nativa (não <Link>): força navegação completa pro
+                          /inbox. Com <Link> soft-nav + force-dynamic, o RSC
+                          remonta via Suspense e o efeito de deseleção zera a
+                          conversa — a conversa não abre. Mesmo motivo do deal-modal. */}
+                      <a
+                        href={`/inbox?contact=${contact.id}&phone=${contact.phone.replace(/\D/g, '')}`}
                         className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
                         title="Abrir no Inbox"
                       >
                         <MessageCircle className="w-4 h-4" />
-                      </Link>
+                      </a>
                       <a
                         href={`tel:${contact.phone}`}
                         className="p-1.5 text-gray-400 hover:text-brand-500 hover:bg-brand-50 rounded-lg transition-colors"
